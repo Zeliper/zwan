@@ -40,3 +40,6 @@ Thumbs.db
 # Release build artifacts
 dist/
 installer/stage/
+
+# Local working notes (not tracked)
+HANDSON.md
