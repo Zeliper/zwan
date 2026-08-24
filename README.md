@@ -1,57 +1,153 @@
-# MyWAN (repo: `zwan`)
+<div align="center">
 
-오픈소스 셀프호스팅 오버레이 네트워크. 누구나 자기 서버를 호스팅해(공인 IP 필요) 자기만의 Private
-네트워크를 만들고, 클라이언트는 **여러 네트워크에 동시에 가입**해 이름만으로 서비스에 접속한다.
+# zwan
 
-Tailscale/ZeroTier 계열이되, **중앙 의존 없이 각자 셀프호스팅**하고 **한 클라이언트가 여러 독립
-네트워크에 동시 가입**하는 것이 핵심 차별점이다.
+**Self-hosted private overlay network — bring your own server, join from anywhere.**
 
-> **이름 규칙:** 기술 식별자(모듈 `github.com/Zeliper/zwan`, 바이너리 `zwan-server`/`zwan-agent`)는
-> 안정적으로 고정한다. **브랜드명(현재 "MyWAN")은 `shared.ProductName` 한 곳에서 언제든 변경**할 수 있다
-> (또는 빌드 시 `-ldflags "-X github.com/Zeliper/zwan/shared.ProductName=NewName"`).
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
+[![Release](https://img.shields.io/github/v/release/Zeliper/zwan)](https://github.com/Zeliper/zwan/releases)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey)](https://github.com/Zeliper/zwan/releases)
+[![Go](https://img.shields.io/badge/built%20with-Go%20%2B%20WireGuard-00ADD8)](https://go.dev)
 
-## 구성
-- **zwan-server** — 셀프호스팅 Control Plane (인증/IPAM/DNS/서비스 레지스트리/ACL/STUN/Relay).
-  Windows 데스크톱 앱(GUI+트레이) 또는 Linux VPS 헤드리스로 구동.
-- **zwan-agent** — Windows 클라이언트 (가상 NIC, 암호화 터널, Split DNS, L4 서비스 라우팅, 다중 네트워크).
-- **frontend** — Wails v2 기반 GUI (React + shadcn/ui, 시스템 다크/라이트 테마).
+[한국어 README →](./README.ko.md)
 
-## 설치 (Releases)
-[Releases](https://github.com/Zeliper/zwan/releases)에서 받는다.
-- **Windows 클라이언트**: `zwan-setup.exe` — 트레이 앱 + SYSTEM 엔진 서비스 + Wintun 가상 WAN 드라이버를 설치하고 로그인 시 시작. 이후 자동 업데이트.
-- **서버(자가호스팅)**: `zwan-server-windows-amd64.exe` / `zwan-server-linux-amd64` — 공인 IP 머신(VPS)용 헤드리스 컨트롤 서버 + 릴레이.
+</div>
 
-아키텍처: 엔진 = SYSTEM 서비스(`cmd/zwan-service`), 트레이/GUI = 사용자 권한, 둘 사이는 named-pipe IPC.
+---
 
-## 문서
-- 설계: [`MyWAN_가상네트워크_아이디어_정리.md`](./MyWAN_가상네트워크_아이디어_정리.md)
-- 구현 계획: [`구현계획.md`](./구현계획.md)
+zwan lets anyone host their **own** private network. Host a server (you need a public IP),
+share a token, and devices connect from anywhere over **encrypted WireGuard tunnels** —
+**directly, or through your server's relay when they're behind NAT**. Services are reached
+by **name** (`nas.home.zwan`) instead of chasing IPs, ports, and router settings.
 
-## 스택
-Go · wireguard-go · Wintun · Wails v2(React/TS/Vite/Tailwind/shadcn) · SQLite(modernc.org/sqlite)
+Think Tailscale/ZeroTier, but **you run the control plane** and **a client can join several
+independent networks at once**. Open source, no central dependency.
 
-## 개발 준비물
-```
-Go 1.23+     winget install --id GoLang.Go -e     (설치됨: 1.26.7)
-Node 18+     (설치됨: 24.x)
-Wails CLI    go install github.com/wailsapp/wails/v2/cmd/wails@latest   (GUI 단계에서)
-gcc(MSYS2)   cgo용 (설치됨)
-```
+## Features
 
-## 빌드
-```
-# 코어 (서버 + 클라이언트 CLI)
-go build ./...
-go test ./...
-go run ./cmd/zwan-server --token demo-token-123   # control :8787, relay :3478
-go run ./cmd/zwan-agent  --token demo-token-123 --device pc-1 --name pc1
-#   --up : 어댑터 + WireGuard 터널(관리자)   --relay : 서버 릴레이 경유
-#   --publish-name minecraft --publish-port 25565 --publish-backend-port 31001
+- 🔐 **Encrypted overlay** — WireGuard data plane (userspace `wireguard-go` + Wintun on Windows).
+- 🏠 **Self-hosted** — run your own control server + relay; no third party in the loop.
+- 🌐 **Works behind NAT** — clients tunnel through your public-IP server's relay when a direct path isn't available.
+- 🧭 **Name-based access** — split-DNS resolver maps `service.<your-suffix>` to the right node.
+- 🚪 **L4 service router** — publish a service and keep the real backend bound to `127.0.0.1` (never exposed on the LAN/internet).
+- 🔀 **Multi-network client** *(in progress)* — one client, several independent networks, without address/DNS collisions.
+- 🖥️ **Desktop app** — system-tray client with a **system dark/light theme**; a SYSTEM service does the tunnelling.
+- ⬆️ **Auto-update** — the client updates itself from GitHub releases; the server can self-update too (`--auto-update`).
 
-# 데스크톱 GUI (Wails v2, gui/ 는 별도 모듈)
-cd gui && wails build     # -> gui/build/bin/gui.exe  (또는 wails dev 로 핫리로드)
+## How it works
+
+```mermaid
+flowchart LR
+  subgraph Server["Your server (public IP)"]
+    API[Control API<br/>auth · IPAM · DNS · services]
+    RELAY[Relay]
+  end
+  A[Client A<br/>tray app + engine service] -- control --> API
+  B[Client B<br/>tray app + engine service] -- control --> API
+  A <== encrypted tunnel ==> B
+  A -. relay fallback .-> RELAY
+  RELAY -. relay fallback .-> B
 ```
 
-## 라이선스
-Apache License 2.0 — [`LICENSE`](./LICENSE) 참조. 제3자 라이브러리 고지는
-[`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md).
+The **control plane** (server) only exchanges membership, endpoints, service and DNS
+records. The **data plane** is peer-to-peer WireGuard; when peers can't reach each other
+directly, packets are relayed through your server (which has the public IP).
+
+On Windows the tunnel runs in a **SYSTEM service** (`zwan-service`); the **tray/GUI** runs
+as your user and talks to the service over a named pipe.
+
+## Install
+
+Grab the latest from **[Releases](https://github.com/Zeliper/zwan/releases)**.
+
+**Windows client** — `zwan-setup.exe`
+Installs the tray app, the SYSTEM engine service, and the Wintun virtual-WAN driver,
+and starts at login. It auto-updates from future releases.
+*(The build is unsigned, so SmartScreen may warn — “More info” → “Run anyway”.)*
+
+**Server** (host your own network on a public-IP box) — headless binaries:
+`zwan-server-linux-amd64`, `zwan-server-linux-arm64`,
+`zwan-server-windows-amd64.exe`, `zwan-server-windows-arm64.exe`.
+
+## Quick start
+
+**1. Host a network** (on a machine with a public IP):
+
+```bash
+./zwan-server-linux-amd64 \
+  --token YOUR-SECRET-TOKEN \
+  --network home --dns-suffix home.zwan \
+  --addr 0.0.0.0:8787 \
+  --relay-public YOUR.PUBLIC.IP:3478 \
+  --auto-update
+```
+
+Open TCP `8787` (control) and UDP `3478` (relay) on your firewall.
+
+**2. Join from a client:**
+
+- **Desktop:** run `zwan-setup.exe`, open **zwan**, **Join** → server `http://YOUR.PUBLIC.IP:8787`, token, connect.
+- **Or host from the desktop:** the app's **Host** tab runs a server in-process and generates a token to share.
+
+**3. Publish a service** (keep the backend on localhost):
+
+```bash
+# on the node that runs, say, a game server on 127.0.0.1:31001
+zwan-agent --server http://YOUR.PUBLIC.IP:8787 --token YOUR-SECRET-TOKEN \
+  --device my-nas --name nas --up --relay \
+  --publish-name minecraft --publish-port 25565 --publish-backend-port 31001
+```
+
+Other members reach it by name — `minecraft.home.zwan:25565` — while the real backend
+stays bound to `127.0.0.1`.
+
+## Build from source
+
+Requires Go 1.23+, Node 18+, and (for the installer) NSIS. For the GUI, the
+[Wails](https://wails.io) CLI: `go install github.com/wailsapp/wails/v2/cmd/wails@latest`.
+
+```bash
+go build ./...          # server + CLI agent + service
+go test  ./...
+cd gui && wails build    # desktop app  ->  gui/build/bin/gui.exe
+
+scripts/build-release.sh 0.1.1   # all release artifacts -> dist/
+```
+
+## Project layout
+
+```
+cmd/            zwan-server (control plane) · zwan-agent (CLI) · zwan-service (SYSTEM service)
+server/         api · ipam · store · relay · host
+client/         engine · tun · wg · wgbind · resolver · l4 · join · ipc · profile · update
+shared/         proto · keys
+gui/            Wails v2 desktop app (React + Tailwind + shadcn/ui)
+installer/      NSIS installer (client + service + Wintun driver)
+```
+
+## Status & roadmap
+
+Working today: control plane, encrypted tunnel (direct + relay), split-DNS + service
+registry, L4 service router, desktop app (tray + service + IPC), Windows installer,
+auto-update. Verified end-to-end minus the parts that need Administrator / two machines.
+
+On the roadmap: TLS/ACME for the control API (currently plain HTTP), ACLs, client-local
+VIP indirection + UDP proxy, IPv6 transport, and code signing.
+
+See [`구현계획.md`](./구현계획.md) (implementation plan) and
+[`MyWAN_가상네트워크_아이디어_정리.md`](./MyWAN_가상네트워크_아이디어_정리.md) (design notes).
+
+## Contributing
+
+Issues and PRs welcome. Keep dependencies permissively licensed (MIT/BSD/Apache/ISC) —
+no GPL/AGPL/LGPL (see [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md)).
+
+## Security
+
+Pre-release software. The control API is plain HTTP for now; run it behind TLS or a
+tunnel if it carries anything sensitive, and treat tokens as secrets. Found a
+vulnerability? Please open a private report rather than a public issue.
+
+## License
+
+[Apache-2.0](./LICENSE).
