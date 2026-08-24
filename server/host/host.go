@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 
 	"github.com/Zeliper/zwan/server/api"
 	"github.com/Zeliper/zwan/server/ipam"
@@ -19,6 +20,7 @@ import (
 	"github.com/Zeliper/zwan/server/store"
 	"github.com/Zeliper/zwan/server/tlsconf"
 	"github.com/Zeliper/zwan/shared"
+	"github.com/Zeliper/zwan/shared/proto"
 )
 
 // Config configures a hosted network.
@@ -50,6 +52,7 @@ type Host struct {
 	acmeSrv  *http.Server
 	rly      *relay.Relay
 	tlsRes   *tlsconf.Result
+	nw       *store.Network
 }
 
 // New returns an idle host.
@@ -126,7 +129,7 @@ func (h *Host) Start(cfg Config) error {
 		}()
 	}
 
-	h.cfg, h.ctrlAddr, h.httpSrv, h.acmeSrv, h.rly, h.tlsRes = cfg, ln.Addr().String(), httpSrv, acmeSrv, rly, tlsRes
+	h.cfg, h.ctrlAddr, h.httpSrv, h.acmeSrv, h.rly, h.tlsRes, h.nw = cfg, ln.Addr().String(), httpSrv, acmeSrv, rly, tlsRes, nw
 	return nil
 }
 
@@ -145,6 +148,7 @@ func (h *Host) Stop() {
 		h.rly = nil
 	}
 	h.tlsRes = nil
+	h.nw = nil
 	h.ctrlAddr = ""
 }
 
@@ -153,6 +157,40 @@ func (h *Host) Running() bool { return h.httpSrv != nil }
 
 // Config returns the running configuration.
 func (h *Host) Config() Config { return h.cfg }
+
+// Members lists the network's registered devices. The server reads its own
+// store directly rather than calling its API, which would need a member
+// credential the server does not hold.
+func (h *Host) Members() []proto.Peer {
+	if h.nw == nil {
+		return nil
+	}
+	members := h.nw.Members()
+	sort.Slice(members, func(i, j int) bool { return members[i].AssignedIP < members[j].AssignedIP })
+	out := make([]proto.Peer, 0, len(members))
+	for _, m := range members {
+		out = append(out, proto.Peer{
+			Hostname: m.Hostname, PublicKey: m.PublicKey, AssignedIP: m.AssignedIP, Endpoint: m.Endpoint,
+		})
+	}
+	return out
+}
+
+// Services lists the network's published services.
+func (h *Host) Services() []proto.Service {
+	if h.nw == nil {
+		return nil
+	}
+	svcs := h.nw.Services()
+	out := make([]proto.Service, 0, len(svcs))
+	for _, s := range svcs {
+		out = append(out, proto.Service{
+			Name: s.Name, Proto: s.Proto, Port: s.Port, BackendPort: s.BackendPort, NodeIP: s.NodeIP,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
 
 // TLSMode returns the resolved TLS mode ("off", "self" or "acme").
 func (h *Host) TLSMode() string {

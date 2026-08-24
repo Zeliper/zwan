@@ -18,6 +18,11 @@ type RegisterResponse struct {
 	OverlayCIDR string `json:"overlay_cidr"`
 	AssignedIP  string `json:"assigned_ip"`
 	RelayAddr   string `json:"relay_addr,omitempty"` // host:port of the server relay (M1b-3)
+
+	// NodeToken authenticates this device on every later control call, as
+	// "Authorization: Bearer <token>". The join token only authorizes the join
+	// itself and is not accepted afterwards.
+	NodeToken string `json:"node_token"`
 }
 
 // Peer describes another member of the same network.
@@ -44,9 +49,9 @@ type Service struct {
 	NodeIP      string `json:"node_ip"`
 }
 
-// RegisterServiceRequest publishes (or updates) a service.
+// RegisterServiceRequest publishes (or updates) a service. The caller is
+// identified by its node token in the Authorization header.
 type RegisterServiceRequest struct {
-	Token string `json:"token"`
 	Service
 }
 

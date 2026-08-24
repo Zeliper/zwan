@@ -17,6 +17,11 @@ type Member struct {
 	AssignedIP string
 	Endpoint   string
 	JoinedAt   time.Time
+
+	// Token is the bearer credential the server issued at registration. The
+	// device presents it on every later control call, so the server knows which
+	// member is asking (the join token only proves the right to join at all).
+	Token string
 }
 
 // Service is a named service reachable at NodeIP:Port over the overlay.
@@ -36,6 +41,7 @@ type Network struct {
 
 	mu       sync.RWMutex
 	members  map[string]*Member  // by DeviceUUID
+	byToken  map[string]*Member  // by issued node token
 	services map[string]*Service // by Name
 }
 
@@ -46,15 +52,34 @@ func NewNetwork(id, dnsSuffix, overlayCIDR string) *Network {
 		DNSSuffix:   dnsSuffix,
 		OverlayCIDR: overlayCIDR,
 		members:     map[string]*Member{},
+		byToken:     map[string]*Member{},
 		services:    map[string]*Service{},
 	}
 }
 
-// Upsert inserts or replaces a member by DeviceUUID.
+// Upsert inserts or replaces a member by DeviceUUID, keeping the token index in
+// step so a re-registration invalidates the device's previous token.
 func (n *Network) Upsert(m *Member) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	if prev, ok := n.members[m.DeviceUUID]; ok && prev.Token != "" {
+		delete(n.byToken, prev.Token)
+	}
 	n.members[m.DeviceUUID] = m
+	if m.Token != "" {
+		n.byToken[m.Token] = m
+	}
+}
+
+// MemberByToken returns the member holding a node token.
+func (n *Network) MemberByToken(token string) (*Member, bool) {
+	if token == "" {
+		return nil, false
+	}
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	m, ok := n.byToken[token]
+	return m, ok
 }
 
 // Members returns a snapshot of the network's members.

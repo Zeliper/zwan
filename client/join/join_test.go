@@ -2,10 +2,12 @@ package join
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/Zeliper/zwan/shared/certpin"
@@ -50,9 +52,14 @@ func TestNormalizeURL(t *testing.T) {
 	}
 }
 
-// controlStub serves just enough of the control API to exercise the client.
-func controlStub(t *testing.T) *httptest.Server {
+const stubNodeToken = "stub-node-token"
+
+// controlStub serves just enough of the control API to exercise the client. It
+// records the Authorization header of the last /v1/peers call so tests can check
+// that the node token is actually being sent.
+func controlStub(t *testing.T) (*httptest.Server, *string) {
 	t.Helper()
+	var lastAuth string
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/register", func(w http.ResponseWriter, r *http.Request) {
 		var req proto.RegisterRequest
@@ -66,9 +73,11 @@ func controlStub(t *testing.T) *httptest.Server {
 		}
 		_ = json.NewEncoder(w).Encode(proto.RegisterResponse{
 			NetworkID: "demo", DNSSuffix: "demo.zwan", OverlayCIDR: "100.64.0.0/16", AssignedIP: "100.64.0.7",
+			NodeToken: stubNodeToken,
 		})
 	})
-	mux.HandleFunc("/v1/peers", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/v1/peers", func(w http.ResponseWriter, r *http.Request) {
+		lastAuth = r.Header.Get("Authorization")
 		_ = json.NewEncoder(w).Encode(proto.PeersResponse{Peers: []proto.Peer{{Hostname: "alice", AssignedIP: "100.64.0.1"}}})
 	})
 	mux.HandleFunc("/v1/services", func(w http.ResponseWriter, _ *http.Request) {
@@ -76,11 +85,11 @@ func controlStub(t *testing.T) *httptest.Server {
 	})
 	srv := httptest.NewTLSServer(mux)
 	t.Cleanup(srv.Close)
-	return srv
+	return srv, &lastAuth
 }
 
 func TestPinnedClientTalksToASelfSignedServer(t *testing.T) {
-	srv := controlStub(t)
+	srv, lastAuth := controlStub(t)
 	pin := certpin.OfCert(srv.Certificate())
 
 	cl, err := NewClient(srv.URL, pin)
@@ -104,10 +113,36 @@ func TestPinnedClientTalksToASelfSignedServer(t *testing.T) {
 	if len(svcs) != 1 || svcs[0].Name != "minecraft" {
 		t.Fatalf("services = %+v", svcs)
 	}
+
+	// The join token must not be reused: later calls carry the node token the
+	// server issued at registration.
+	if !cl.Authenticated() {
+		t.Fatal("client did not keep the node token")
+	}
+	if want := "Bearer " + stubNodeToken; *lastAuth != want {
+		t.Fatalf("Authorization = %q, want %q", *lastAuth, want)
+	}
+}
+
+func TestJoinRejectsAServerThatIssuesNoNodeToken(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/register", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(proto.RegisterResponse{NetworkID: "demo", AssignedIP: "100.64.0.7"})
+	})
+	srv := httptest.NewTLSServer(mux)
+	defer srv.Close()
+
+	cl, err := NewClient(srv.URL, certpin.OfCert(srv.Certificate()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cl.Join("token", "device", "bob", ""); err == nil {
+		t.Fatal("join should fail when the server issues no node token")
+	}
 }
 
 func TestPinCanTravelInsideTheServerURL(t *testing.T) {
-	srv := controlStub(t)
+	srv, _ := controlStub(t)
 	pin := certpin.OfCert(srv.Certificate())
 
 	cl, err := NewClient(srv.URL+"#"+url.PathEscape(pin), "")
@@ -126,7 +161,7 @@ func TestPinCanTravelInsideTheServerURL(t *testing.T) {
 }
 
 func TestWrongOrMissingPinIsRejected(t *testing.T) {
-	srv := controlStub(t)
+	srv, _ := controlStub(t)
 
 	// A syntactically valid pin for a different key must not connect.
 	other := certpin.OfSPKI([]byte("some other key"))
@@ -153,5 +188,106 @@ func TestWrongOrMissingPinIsRejected(t *testing.T) {
 func TestNewClientRejectsAMalformedPin(t *testing.T) {
 	if _, err := NewClient("https://example.test:8787", "not-a-fingerprint"); err == nil {
 		t.Fatal("NewClient accepted a malformed pin")
+	}
+}
+
+// restartableStub models a control server whose in-memory state can be wiped,
+// which is what a server restart looks like to a client holding a node token.
+type restartableStub struct {
+	mu       sync.Mutex
+	token    string
+	issued   int
+	assigned string
+	pubKeys  []string
+}
+
+func (st *restartableStub) handler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/register", func(w http.ResponseWriter, r *http.Request) {
+		var req proto.RegisterRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		st.mu.Lock()
+		st.issued++
+		st.token = fmt.Sprintf("node-token-%d", st.issued)
+		st.pubKeys = append(st.pubKeys, req.PublicKey)
+		resp := proto.RegisterResponse{
+			NetworkID: "demo", DNSSuffix: "demo.zwan", OverlayCIDR: "100.64.0.0/16",
+			AssignedIP: st.assigned, NodeToken: st.token,
+		}
+		st.mu.Unlock()
+		_ = json.NewEncoder(w).Encode(resp)
+	})
+	mux.HandleFunc("/v1/peers", func(w http.ResponseWriter, r *http.Request) {
+		st.mu.Lock()
+		want := "Bearer " + st.token
+		st.mu.Unlock()
+		if st.token == "" || r.Header.Get("Authorization") != want {
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(proto.ErrorResponse{Error: "a node token is required; register first"})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(proto.PeersResponse{Peers: []proto.Peer{{Hostname: "alice", AssignedIP: "100.64.0.1"}}})
+	})
+	return mux
+}
+
+// forget wipes the issued token, as a restart would.
+func (st *restartableStub) forget() {
+	st.mu.Lock()
+	st.token = ""
+	st.mu.Unlock()
+}
+
+func TestClientReRegistersAfterTheServerForgetsIt(t *testing.T) {
+	st := &restartableStub{assigned: "100.64.0.7"}
+	srv := httptest.NewTLSServer(st.handler())
+	defer srv.Close()
+
+	cl, err := NewClient(srv.URL, certpin.OfCert(srv.Certificate()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cl.Join("token", "device", "bob", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	st.forget()
+	if _, err := cl.Peers(); err != nil {
+		t.Fatalf("client did not recover from a server restart: %v", err)
+	}
+	if st.issued != 2 {
+		t.Fatalf("expected exactly one re-registration, got %d registrations", st.issued)
+	}
+	// The node key is this device's identity on the tunnel; refreshing a token
+	// must not change it, or every peer's WireGuard config goes stale.
+	if st.pubKeys[0] != st.pubKeys[1] {
+		t.Fatalf("re-registration changed the node key: %q -> %q", st.pubKeys[0], st.pubKeys[1])
+	}
+}
+
+func TestReRegistrationReportsAChangedOverlayAddress(t *testing.T) {
+	st := &restartableStub{assigned: "100.64.0.7"}
+	srv := httptest.NewTLSServer(st.handler())
+	defer srv.Close()
+
+	cl, err := NewClient(srv.URL, certpin.OfCert(srv.Certificate()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cl.Join("token", "device", "bob", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	st.forget()
+	st.mu.Lock()
+	st.assigned = "100.64.0.9" // the restarted server allocated a different address
+	st.mu.Unlock()
+
+	_, err = cl.Peers()
+	if err == nil {
+		t.Fatal("a reassigned overlay address should be reported, not used silently")
+	}
+	if !strings.Contains(err.Error(), "reassigned") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

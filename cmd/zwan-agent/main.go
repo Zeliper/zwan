@@ -83,7 +83,7 @@ func main() {
 			log.Fatal("--publish-port is required with --publish-name")
 		}
 		svc := proto.Service{Name: *publishName, Proto: *publishProto, Port: *publishPort, BackendPort: *publishBackend, NodeIP: res.Register.AssignedIP}
-		if err := cl.PublishService(*token, svc); err != nil {
+		if err := cl.PublishService(svc); err != nil {
 			log.Fatalf("publish service: %v", err)
 		}
 		log.Printf("published service %s.%s -> %s:%d/%s (backend 127.0.0.1:%d)",

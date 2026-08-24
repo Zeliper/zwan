@@ -9,7 +9,6 @@ import (
 
 	"github.com/Zeliper/zwan/client/engine"
 	"github.com/Zeliper/zwan/client/ipc"
-	"github.com/Zeliper/zwan/client/join"
 	"github.com/Zeliper/zwan/client/update"
 	"github.com/Zeliper/zwan/server/host"
 	"github.com/Zeliper/zwan/shared"
@@ -125,15 +124,8 @@ func (a *App) HostStatus() *HostState {
 		TLSMode: a.srv.TLSMode(), Pin: a.srv.Pin(), JoinURL: a.srv.JoinURL(a.publicHost),
 	}
 	if a.srv.Running() {
-		// Query our own control API the same way a client would, pin included.
-		if cl, err := join.NewClient(a.srv.LocalURL(), a.srv.Pin()); err == nil {
-			if p, err := cl.Peers(); err == nil {
-				st.Peers = p
-			}
-			if s, err := cl.Services(); err == nil {
-				st.Services = s
-			}
-		}
+		st.Peers = a.srv.Members()
+		st.Services = a.srv.Services()
 	}
 	return st
 }

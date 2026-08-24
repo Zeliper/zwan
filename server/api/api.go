@@ -1,19 +1,27 @@
 // Package api implements the zwan control-plane HTTP endpoints.
 //
-// M1a endpoints:
+// Endpoints:
 //
-//	GET  /healthz      liveness + identity
-//	POST /v1/register  join a network (token -> assigned IP)
-//	GET  /v1/peers     list members of the network
+//	GET  /healthz      liveness + identity (unauthenticated)
+//	POST /v1/register  join a network (join token -> assigned IP + node token)
+//	GET  /v1/peers     list members of the network (node token)
+//	GET  /v1/services  list services (node token)
+//	POST /v1/services  publish a service on the calling node (node token)
 //
-// Auth is a single shared token for now; per-network tokens/passwords and TLS
-// (ACME) arrive in later milestones.
+// Two credentials are involved. The *join token* is the shared secret that
+// authorizes joining at all; it is accepted only by /v1/register. Registration
+// returns a per-device *node token*, which every later call must present as
+// "Authorization: Bearer <token>" — that is what tells the server which member
+// is asking, and it is the hook access control hangs off.
 package api
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/Zeliper/zwan/server/ipam"
@@ -78,6 +86,11 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
+	nodeToken, err := newNodeToken()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not issue a node token")
+		return
+	}
 	s.net.Upsert(&store.Member{
 		DeviceUUID: req.DeviceUUID,
 		Hostname:   req.Hostname,
@@ -85,6 +98,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		AssignedIP: ip.String(),
 		Endpoint:   req.Endpoint,
 		JoinedAt:   time.Now(),
+		Token:      nodeToken,
 	})
 	writeJSON(w, http.StatusOK, proto.RegisterResponse{
 		NetworkID:   s.net.ID,
@@ -92,10 +106,14 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		OverlayCIDR: s.net.OverlayCIDR,
 		AssignedIP:  ip.String(),
 		RelayAddr:   s.relayAddr,
+		NodeToken:   nodeToken,
 	})
 }
 
 func (s *Server) peers(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.caller(w, r); !ok {
+		return
+	}
 	members := s.net.Members()
 	sort.Slice(members, func(i, j int) bool { return members[i].AssignedIP < members[j].AssignedIP })
 	resp := proto.PeersResponse{Peers: make([]proto.Peer, 0, len(members))}
@@ -114,6 +132,9 @@ func (s *Server) peers(w http.ResponseWriter, r *http.Request) {
 func (s *Server) services(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
+		if _, ok := s.caller(w, r); !ok {
+			return
+		}
 		svcs := s.net.Services()
 		resp := proto.ServicesResponse{Services: make([]proto.Service, 0, len(svcs))}
 		for _, sv := range svcs {
@@ -125,17 +146,25 @@ func (s *Server) services(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, resp)
 
 	case http.MethodPost:
+		caller, ok := s.caller(w, r)
+		if !ok {
+			return
+		}
 		var req proto.RegisterServiceRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeErr(w, http.StatusBadRequest, "invalid JSON body")
 			return
 		}
-		if s.token == "" || req.Token != s.token {
-			writeErr(w, http.StatusUnauthorized, "invalid token")
+		if req.Name == "" || req.Port == 0 {
+			writeErr(w, http.StatusBadRequest, "name and port are required")
 			return
 		}
-		if req.Name == "" || req.NodeIP == "" || req.Port == 0 {
-			writeErr(w, http.StatusBadRequest, "name, node_ip and port are required")
+		// A member may only publish services on its own node; otherwise anyone
+		// could point a name at someone else's address.
+		if req.NodeIP == "" {
+			req.NodeIP = caller.AssignedIP
+		} else if req.NodeIP != caller.AssignedIP {
+			writeErr(w, http.StatusForbidden, "a service must be published on the calling node")
 			return
 		}
 		protocol := req.Proto
@@ -148,6 +177,36 @@ func (s *Server) services(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeErr(w, http.StatusMethodNotAllowed, "GET or POST only")
 	}
+}
+
+// caller resolves the node token on a request to the member that owns it,
+// answering 401 itself when there is none.
+func (s *Server) caller(w http.ResponseWriter, r *http.Request) (*store.Member, bool) {
+	m, ok := s.net.MemberByToken(bearer(r))
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "a node token is required; register first")
+		return nil, false
+	}
+	return m, true
+}
+
+// bearer extracts the credential from an Authorization header.
+func bearer(r *http.Request) string {
+	h := r.Header.Get("Authorization")
+	const prefix = "Bearer "
+	if len(h) <= len(prefix) || !strings.EqualFold(h[:len(prefix)], prefix) {
+		return ""
+	}
+	return strings.TrimSpace(h[len(prefix):])
+}
+
+// newNodeToken mints a 256-bit random bearer credential.
+func newNodeToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

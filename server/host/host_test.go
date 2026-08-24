@@ -58,6 +58,13 @@ func TestDefaultHostIsPinnedTLS(t *testing.T) {
 	if res.Register.NetworkID != "demo" || res.Register.AssignedIP == "" {
 		t.Fatalf("register response = %+v", res.Register)
 	}
+
+	// The host reads its own store, so the GUI sees members without holding a
+	// member credential of its own.
+	members := h.Members()
+	if len(members) != 1 || members[0].Hostname != "alice" {
+		t.Fatalf("host members = %+v", members)
+	}
 }
 
 // The printed join address carries the pin, so it can be copied as one value.
@@ -74,6 +81,9 @@ func TestJoinURLCarriesThePin(t *testing.T) {
 	}
 	if cl.BaseURL() != server {
 		t.Fatalf("base URL = %q, want %q", cl.BaseURL(), server)
+	}
+	if _, err := cl.Join("test-token", "device-1", "alice", ""); err != nil {
+		t.Fatalf("join via the join URL: %v", err)
 	}
 	if _, err := cl.Peers(); err != nil {
 		t.Fatalf("peers via the join URL: %v", err)
@@ -112,6 +122,9 @@ func TestTLSOffServesPlaintext(t *testing.T) {
 	cl, err := join.NewClient(h.LocalURL(), "")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if _, err := cl.Join("test-token", "device-1", "alice", ""); err != nil {
+		t.Fatalf("join over plaintext: %v", err)
 	}
 	if _, err := cl.Peers(); err != nil {
 		t.Fatalf("peers over plaintext: %v", err)

@@ -174,7 +174,12 @@ persistent self-signed key otherwise, which clients authenticate by pin. Hand th
 a channel you trust (it is part of the printed join address); a client given no pin falls
 back to normal CA verification and will refuse a self-signed server. `--tls=off` remains
 for local testing and reverse-proxy setups and sends tokens in the clear. Treat join tokens
-as secrets. Found a vulnerability? Please open a private report rather than a public issue.
+as secrets.
+
+The join token only authorizes joining. Registration returns a per-device node
+token, and the membership and service directories require it — so reaching the
+API is not enough to enumerate a network, and a member can only publish services
+on its own node. Found a vulnerability? Please open a private report rather than a public issue.
 
 ## License
 
