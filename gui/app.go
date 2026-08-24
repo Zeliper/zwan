@@ -5,6 +5,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/Zeliper/zwan/client/engine"
@@ -14,6 +16,7 @@ import (
 	serveripc "github.com/Zeliper/zwan/server/ipc"
 	"github.com/Zeliper/zwan/server/supervisor"
 	"github.com/Zeliper/zwan/shared"
+	"github.com/Zeliper/zwan/shared/acl"
 	"github.com/Zeliper/zwan/shared/proto"
 	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -119,6 +122,28 @@ func (a *App) HostStart(cfg serverconfig.Config) error {
 		return nil
 	}
 	return a.local().Start(cfg)
+}
+
+// ParseACL validates the access rules typed in the UI, one
+// "<src groups>-><dst groups>" per line, and returns them in the form the server
+// stores. Blank lines and #-comments are ignored.
+//
+// The UI does not parse rules itself: one parser means the text an operator sees
+// and the policy the server enforces cannot drift apart.
+func (a *App) ParseACL(text string) ([]acl.Rule, error) {
+	var rules []acl.Rule
+	for i, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		r, err := acl.ParseRule(line)
+		if err != nil {
+			return nil, fmt.Errorf("line %d: %w", i+1, err)
+		}
+		rules = append(rules, r)
+	}
+	return rules, nil
 }
 
 // HostStop stops hosting.

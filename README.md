@@ -31,6 +31,7 @@ independent networks at once**. Open source, no central dependency.
 - 🌐 **Works behind NAT** — clients tunnel through your public-IP server's relay when a direct path isn't available.
 - 🧭 **Name-based access** — split-DNS resolver maps `service.<your-suffix>` to the right node.
 - 🚪 **L4 service router** — publish a service and keep the real backend bound to `127.0.0.1` (never exposed on the LAN/internet).
+- 👥 **Group ACLs** — hand each group its own join token and write rules between them; a member never receives the keys of a peer it may not reach.
 - 🔀 **Multi-network client** *(in progress)* — one client, several independent networks, without address/DNS collisions.
 - 🖥️ **Desktop app** — one tray app for both roles (join a network, host one), with a **system dark/light theme**; SYSTEM services do the work in the background.
 - ⬆️ **Auto-update** — the client updates itself from GitHub releases; the server can self-update too (`--auto-update`).
@@ -131,6 +132,37 @@ zwan-agent --server "https://YOUR.PUBLIC.IP:8787#sha256:NMuaxTGRTKlRnx..." --tok
 Other members reach it by name — `minecraft.home.zwan:25565` — while the real backend
 stays bound to `127.0.0.1`.
 
+## Access control
+
+By default every member reaches every other, which is what a household wants. To
+split a network up, give each group its own join token and write rules between
+the groups:
+
+```bash
+./zwan-server-linux-amd64 --token FAMILY-TOKEN \
+  --join-token dev=DEV-TOKEN --join-token guest=GUEST-TOKEN --join-token nas=NAS-TOKEN \
+  --acl "dev->nas" --acl "guest->nas"
+```
+
+The token a device joins with decides its group — nothing the client sends does.
+The first rule flips the network to default-deny, so `dev` and `guest` above can
+each reach `nas` but never each other. Larger policies can live in a JSON file
+passed with `--acl-file`, and the desktop app's **Host** tab edits the same
+groups and rules.
+
+Enforcement is by omission rather than by filtering: a member is simply not told
+about peers it may not reach, and without a peer's public key there is no tunnel
+to it. A service can be narrowed further than its host node:
+
+```bash
+zwan-agent ... --publish-name files --publish-port 445 \
+  --publish-backend-port 31445 --publish-allow dev
+```
+
+That one is checked twice — the control server hides it from other groups, and
+the node hosting it refuses connections from them, so knowing the address and
+port is not enough.
+
 ## Build from source
 
 Requires Go 1.23+, Node 18+, and (for the installer) NSIS. For the GUI, the
@@ -150,19 +182,19 @@ scripts/build-release.sh 0.1.1   # all release artifacts -> dist/
 cmd/            zwan-server (control plane + Windows service) · zwan-agent (CLI) · zwan-service (engine service)
 server/         api · ipam · store · relay · host · tlsconf (ACME / self-signed) · config · ipc · supervisor
 client/         engine · tun · wg · wgbind · resolver · l4 · join · ipc · profile · update
-shared/         proto · keys · certpin (SPKI pinning)
+shared/         proto · keys · certpin (SPKI pinning) · acl (group policy)
 gui/            Wails v2 desktop app + tray (React + Tailwind + shadcn/ui)
 installer/      NSIS installer (app + optional client and server services)
 ```
 
 ## Status & roadmap
 
-Working today: control plane over TLS (ACME or pinned self-signed), encrypted tunnel
+Working today: control plane over TLS (ACME or pinned self-signed), group ACLs, encrypted tunnel
 (direct + relay), split-DNS + service registry, L4 service router, desktop app (tray +
 service + IPC), Windows installer, auto-update. Verified end-to-end minus the parts that
 need Administrator / two machines.
 
-On the roadmap: ACLs, multi-network client, per-service VIPs with an all-ports transparent
+On the roadmap: multi-network client, per-service VIPs with an all-ports transparent
 forwarder (TCP + UDP), NAT traversal, IPv6 transport, and code signing.
 
 See [`구현계획.md`](./구현계획.md) (implementation plan) and

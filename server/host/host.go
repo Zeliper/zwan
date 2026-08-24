@@ -20,6 +20,7 @@ import (
 	"github.com/Zeliper/zwan/server/store"
 	"github.com/Zeliper/zwan/server/tlsconf"
 	"github.com/Zeliper/zwan/shared"
+	"github.com/Zeliper/zwan/shared/acl"
 	"github.com/Zeliper/zwan/shared/proto"
 )
 
@@ -28,7 +29,7 @@ type Config struct {
 	NetworkID   string
 	DNSSuffix   string
 	CIDR        string
-	Token       string
+	Token       string // join token for the default group
 	ControlAddr string // control API listen (host:port)
 	RelayAddr   string // relay UDP listen (host:port)
 	RelayPublic string // relay host:port advertised to clients (default = RelayAddr)
@@ -42,6 +43,13 @@ type Config struct {
 	ACMEEmail     string
 	ACMEDirectory string // ACME directory URL override (e.g. Let's Encrypt staging)
 	ACMEHTTPAddr  string // HTTP-01 challenge listen address (default ":80")
+
+	// Access control. GroupTokens maps a group name to the join token that
+	// admits members into it; ACL is the rule set between groups. With no extra
+	// tokens and no rules every member reaches every other, which is what a
+	// single-group network wants.
+	GroupTokens map[string]string
+	ACL         []acl.Rule
 }
 
 // Host is a running server instance.
@@ -95,8 +103,12 @@ func (h *Host) Start(cfg Config) error {
 	if err != nil {
 		return err
 	}
+	tokens, err := acl.BuildJoinTokens(cfg.Token, cfg.GroupTokens)
+	if err != nil {
+		return err
+	}
 	nw := store.NewNetwork(cfg.NetworkID, cfg.DNSSuffix, cfg.CIDR)
-	srv := api.New(nw, alloc, cfg.Token, relayPub)
+	srv := api.New(nw, alloc, tokens, &acl.Policy{Rules: cfg.ACL}, relayPub)
 
 	rly := relay.New()
 	if _, err := rly.Listen(cfg.RelayAddr); err != nil {

@@ -4,6 +4,7 @@ import {update} from '../models';
 import {engine} from '../models';
 import {config} from '../models';
 import {main} from '../models';
+import {acl} from '../models';
 
 export function ApplyUpdate(arg1:string):Promise<void>;
 
@@ -20,6 +21,8 @@ export function HostStart(arg1:config.Config):Promise<void>;
 export function HostStatus():Promise<main.HostState>;
 
 export function HostStop():Promise<void>;
+
+export function ParseACL(arg1:string):Promise<Array<acl.Rule>>;
 
 export function QuitApp():Promise<void>;
 

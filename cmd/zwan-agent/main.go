@@ -49,6 +49,7 @@ func main() {
 	publishPort := flag.Int("publish-port", 0, "published service port (over the overlay)")
 	publishProto := flag.String("publish-proto", "tcp", "published service protocol (tcp/udp)")
 	publishBackend := flag.Int("publish-backend-port", 0, "localhost backend port; enables the L4 proxy (0 = service binds the overlay itself)")
+	publishAllow := flag.String("publish-allow", "", "comma-separated groups allowed to use the published service (default: everyone who can reach this node)")
 	flag.Parse()
 
 	log.Printf("%s (%s) %s", shared.ProductName, shared.ComponentAgent, shared.Version)
@@ -82,12 +83,16 @@ func main() {
 		if *publishPort == 0 {
 			log.Fatal("--publish-port is required with --publish-name")
 		}
-		svc := proto.Service{Name: *publishName, Proto: *publishProto, Port: *publishPort, BackendPort: *publishBackend, NodeIP: res.Register.AssignedIP}
+		svc := proto.Service{
+			Name: *publishName, Proto: *publishProto, Port: *publishPort,
+			BackendPort: *publishBackend, NodeIP: res.Register.AssignedIP,
+			AllowGroups: splitGroups(*publishAllow),
+		}
 		if err := cl.PublishService(svc); err != nil {
 			log.Fatalf("publish service: %v", err)
 		}
-		log.Printf("published service %s.%s -> %s:%d/%s (backend 127.0.0.1:%d)",
-			svc.Name, res.Register.DNSSuffix, svc.NodeIP, svc.Port, svc.Proto, svc.BackendPort)
+		log.Printf("published service %s.%s -> %s:%d/%s (backend 127.0.0.1:%d, allowed: %s)",
+			svc.Name, res.Register.DNSSuffix, svc.NodeIP, svc.Port, svc.Proto, svc.BackendPort, allowLabel(svc.AllowGroups))
 	}
 
 	adapterName := *adapter
@@ -199,6 +204,7 @@ func runTunnel(cl *join.Client, res *join.Result, adapterName string, wgPort int
 func refreshPeers(cl *join.Client, dev *wg.Device, ad *tun.Adapter, rslv *resolver.Resolver, suffix, selfIP string, useRelay bool, stop <-chan struct{}) {
 	routed := map[string]bool{}
 	hostProxies := map[string]*l4.TCPProxy{}
+	access := &l4.AccessPolicy{}
 	var lastSig string
 	var curPeers []wg.Peer
 	tick := time.NewTicker(3 * time.Second)
@@ -256,7 +262,8 @@ func refreshPeers(cl *join.Client, dev *wg.Device, ad *tun.Adapter, rslv *resolv
 			log.Printf("service refresh: %v", serr)
 		}
 		updateDNS(rslv, suffix, peers, svcs)
-		manageHostProxies(hostProxies, selfIP, svcs)
+		access.Set(peers, svcs)
+		manageHostProxies(hostProxies, selfIP, svcs, access)
 	}
 
 	apply()
@@ -306,8 +313,9 @@ func updateDNS(rslv *resolver.Resolver, suffix string, peers []proto.Peer, svcs 
 
 // manageHostProxies starts an L4 proxy for each service hosted on this node that
 // has a localhost backend, so the real backend stays bound to 127.0.0.1 while the
-// service is reachable at <selfOverlayIP>:<port> over the overlay.
-func manageHostProxies(running map[string]*l4.TCPProxy, selfIP string, svcs []proto.Service) {
+// service is reachable at <selfOverlayIP>:<port> over the overlay. Each proxy
+// checks the source group against the service's allow list.
+func manageHostProxies(running map[string]*l4.TCPProxy, selfIP string, svcs []proto.Service, access *l4.AccessPolicy) {
 	for _, s := range svcs {
 		if s.NodeIP != selfIP || s.BackendPort == 0 {
 			continue
@@ -320,7 +328,7 @@ func manageHostProxies(running map[string]*l4.TCPProxy, selfIP string, svcs []pr
 		}
 		listen := fmt.Sprintf("%s:%d", selfIP, s.Port)
 		backend := fmt.Sprintf("127.0.0.1:%d", s.BackendPort)
-		p, err := l4.ListenTCP(listen, backend)
+		p, err := l4.ListenTCP(listen, backend, access.Filter(s.Name))
 		if err != nil {
 			log.Printf("service %s proxy on %s: %v", s.Name, listen, err)
 			continue
@@ -368,4 +376,23 @@ func trustLabel(cl *join.Client) string {
 	default:
 		return "TLS, CA-verified"
 	}
+}
+
+// splitGroups parses the comma-separated --publish-allow value.
+func splitGroups(s string) []string {
+	var out []string
+	for _, g := range strings.Split(s, ",") {
+		if g = strings.TrimSpace(g); g != "" {
+			out = append(out, g)
+		}
+	}
+	return out
+}
+
+// allowLabel renders a service's allow list for the log line.
+func allowLabel(groups []string) string {
+	if len(groups) == 0 {
+		return "any group that can reach this node"
+	}
+	return strings.Join(groups, ",")
 }

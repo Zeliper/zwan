@@ -13,6 +13,11 @@
 // returns a per-device *node token*, which every later call must present as
 // "Authorization: Bearer <token>" — that is what tells the server which member
 // is asking, and it is the hook access control hangs off.
+//
+// Access control works by omission. Which join token a device used decides its
+// group, and the peer and service listings only contain what that group is
+// allowed to reach. Withholding a peer is real enforcement rather than a hint:
+// without the peer's public key there is no tunnel to it at all.
 package api
 
 import (
@@ -27,6 +32,7 @@ import (
 	"github.com/Zeliper/zwan/server/ipam"
 	"github.com/Zeliper/zwan/server/store"
 	"github.com/Zeliper/zwan/shared"
+	"github.com/Zeliper/zwan/shared/acl"
 	"github.com/Zeliper/zwan/shared/proto"
 )
 
@@ -34,14 +40,22 @@ import (
 type Server struct {
 	net       *store.Network
 	ipam      *ipam.Allocator
-	token     string
+	tokens    acl.JoinTokens
+	policy    *acl.Policy
 	relayAddr string // host:port of the server relay advertised to clients
 }
 
-// New builds an API server for one network. relayAddr is the public host:port of
-// the server relay (may be empty to disable relay advertisement).
-func New(net *store.Network, alloc *ipam.Allocator, token, relayAddr string) *Server {
-	return &Server{net: net, ipam: alloc, token: token, relayAddr: relayAddr}
+// New builds an API server for one network.
+//
+// tokens maps each join token to the group its holder joins into; policy may be
+// nil or empty, which lets every member reach every other. relayAddr is the
+// public host:port of the server relay (may be empty to disable relay
+// advertisement).
+func New(net *store.Network, alloc *ipam.Allocator, tokens acl.JoinTokens, policy *acl.Policy, relayAddr string) *Server {
+	if tokens == nil {
+		tokens = acl.JoinTokens{}
+	}
+	return &Server{net: net, ipam: alloc, tokens: tokens, policy: policy, relayAddr: relayAddr}
 }
 
 // Routes returns the HTTP handler.
@@ -73,7 +87,8 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if s.token == "" || req.Token != s.token {
+	group, ok := s.tokens.Group(req.Token)
+	if !ok {
 		writeErr(w, http.StatusUnauthorized, "invalid token")
 		return
 	}
@@ -99,6 +114,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		Endpoint:   req.Endpoint,
 		JoinedAt:   time.Now(),
 		Token:      nodeToken,
+		Group:      group,
 	})
 	writeJSON(w, http.StatusOK, proto.RegisterResponse{
 		NetworkID:   s.net.ID,
@@ -111,35 +127,62 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) peers(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.caller(w, r); !ok {
+	caller, ok := s.caller(w, r)
+	if !ok {
 		return
 	}
 	members := s.net.Members()
 	sort.Slice(members, func(i, j int) bool { return members[i].AssignedIP < members[j].AssignedIP })
 	resp := proto.PeersResponse{Peers: make([]proto.Peer, 0, len(members))}
 	for _, m := range members {
+		// A member always sees itself; everyone else has to be allowed.
+		if m.DeviceUUID != caller.DeviceUUID && !s.policy.Connected(caller.Group, m.Group) {
+			continue
+		}
 		resp.Peers = append(resp.Peers, proto.Peer{
 			Hostname:   m.Hostname,
 			PublicKey:  m.PublicKey,
 			AssignedIP: m.AssignedIP,
 			Endpoint:   m.Endpoint,
+			Group:      m.Group,
 		})
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// visibleService reports whether a member may see a service — and therefore
+// resolve it, and be let through by the node hosting it.
+func (s *Server) visibleService(caller *store.Member, sv *store.Service) bool {
+	if sv.NodeIP == caller.AssignedIP {
+		return true // your own services are always yours to see
+	}
+	hostMember, ok := s.net.MemberByIP(sv.NodeIP)
+	if !ok {
+		return false // the node that published it is no longer a member
+	}
+	if !s.policy.Connected(caller.Group, hostMember.Group) {
+		return false
+	}
+	return acl.AllowsGroup(sv.AllowGroups, caller.Group)
 }
 
 // services handles GET (list) and POST (publish) of network services.
 func (s *Server) services(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		if _, ok := s.caller(w, r); !ok {
+		caller, ok := s.caller(w, r)
+		if !ok {
 			return
 		}
 		svcs := s.net.Services()
 		resp := proto.ServicesResponse{Services: make([]proto.Service, 0, len(svcs))}
 		for _, sv := range svcs {
+			if !s.visibleService(caller, sv) {
+				continue
+			}
 			resp.Services = append(resp.Services, proto.Service{
-				Name: sv.Name, Proto: sv.Proto, Port: sv.Port, BackendPort: sv.BackendPort, NodeIP: sv.NodeIP,
+				Name: sv.Name, Proto: sv.Proto, Port: sv.Port, BackendPort: sv.BackendPort,
+				NodeIP: sv.NodeIP, AllowGroups: sv.AllowGroups,
 			})
 		}
 		sort.Slice(resp.Services, func(i, j int) bool { return resp.Services[i].Name < resp.Services[j].Name })
@@ -171,8 +214,15 @@ func (s *Server) services(w http.ResponseWriter, r *http.Request) {
 		if protocol == "" {
 			protocol = "tcp"
 		}
-		s.net.UpsertService(&store.Service{Name: req.Name, Proto: protocol, Port: req.Port, BackendPort: req.BackendPort, NodeIP: req.NodeIP})
-		writeJSON(w, http.StatusOK, proto.Service{Name: req.Name, Proto: protocol, Port: req.Port, BackendPort: req.BackendPort, NodeIP: req.NodeIP})
+		allow := cleanGroups(req.AllowGroups)
+		s.net.UpsertService(&store.Service{
+			Name: req.Name, Proto: protocol, Port: req.Port, BackendPort: req.BackendPort,
+			NodeIP: req.NodeIP, AllowGroups: allow,
+		})
+		writeJSON(w, http.StatusOK, proto.Service{
+			Name: req.Name, Proto: protocol, Port: req.Port, BackendPort: req.BackendPort,
+			NodeIP: req.NodeIP, AllowGroups: allow,
+		})
 
 	default:
 		writeErr(w, http.StatusMethodNotAllowed, "GET or POST only")
@@ -198,6 +248,18 @@ func bearer(r *http.Request) string {
 		return ""
 	}
 	return strings.TrimSpace(h[len(prefix):])
+}
+
+// cleanGroups drops blanks from a service's allow list, so a stray empty entry
+// cannot be mistaken for a group name.
+func cleanGroups(in []string) []string {
+	var out []string
+	for _, g := range in {
+		if g = strings.TrimSpace(g); g != "" {
+			out = append(out, g)
+		}
+	}
+	return out
 }
 
 // newNodeToken mints a 256-bit random bearer credential.

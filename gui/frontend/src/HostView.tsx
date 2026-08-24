@@ -1,22 +1,32 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertTriangle, Copy, Play, RefreshCw, Server, ShieldAlert, ShieldCheck, Share2, Square, Users } from 'lucide-react'
+import { AlertTriangle, Copy, KeyRound, Play, Plus, RefreshCw, Server, ShieldAlert, ShieldCheck, Share2, Square, Users, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
-import { HostGenToken, HostStart, HostStatus, HostStop } from '../wailsjs/go/main/App'
+import { HostGenToken, HostStart, HostStatus, HostStop, ParseACL } from '../wailsjs/go/main/App'
 
 interface Peer {
   hostname: string
   public_key: string
   assigned_ip: string
+  group?: string
 }
 interface Service {
   name: string
   proto: string
   port: number
   node_ip: string
+  allow_groups?: string[]
+}
+interface Rule {
+  src: string[]
+  dst: string[]
+}
+interface GroupRow {
+  name: string
+  token: string
 }
 interface ServerConfig {
   networkId: string
@@ -29,6 +39,8 @@ interface ServerConfig {
   tlsMode: string
   domains: string[]
   publicHost: string
+  groupTokens?: Record<string, string>
+  acl?: Rule[]
   autoStart: boolean
 }
 interface HostState {
@@ -60,8 +72,16 @@ const defaults: ServerConfig = {
 const inputClass =
   'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring'
 
+// ruleLines renders stored rules back into the one-per-line text the operator
+// typed, matching the shorthand the Go parser accepts.
+function ruleLines(rules?: Rule[]): string {
+  return (rules ?? []).map((r) => `${r.src.join(',')}->${r.dst.join(',')}`).join('\n')
+}
+
 export default function HostView() {
   const [cfg, setCfg] = useState<ServerConfig>(defaults)
+  const [groups, setGroups] = useState<GroupRow[]>([])
+  const [rulesText, setRulesText] = useState('')
   const [state, setState] = useState<HostState | null>(null)
   const [managed, setManaged] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -95,6 +115,8 @@ export default function HostView() {
           setCfg({ ...defaults, ...s.config, token: '' })
           gen()
         }
+        setGroups(Object.entries(s.config.groupTokens ?? {}).map(([name, token]) => ({ name, token })))
+        setRulesText(ruleLines(s.config.acl))
       }
     } catch {
       setState(null)
@@ -113,7 +135,14 @@ export default function HostView() {
     setBusy(true)
     setError('')
     try {
-      await HostStart(cfg as any)
+      const acl = await ParseACL(rulesText)
+      const groupTokens: Record<string, string> = {}
+      for (const g of groups) {
+        const name = g.name.trim()
+        const token = g.token.trim()
+        if (name && token) groupTokens[name] = token
+      }
+      await HostStart({ ...cfg, groupTokens, acl } as any)
       await refresh()
     } catch (e: any) {
       setError(String(e?.message ?? e))
@@ -253,6 +282,63 @@ export default function HostView() {
                 className="font-mono"
               />
             </div>
+            <div className="space-y-2 rounded-md border border-border p-3">
+              <div className="flex items-center gap-2">
+                <KeyRound className="h-4 w-4" />
+                <Label className="text-sm font-medium">Access control</Label>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Optional. Each group gets its own join token; the token above puts members in <span className="font-mono">default</span>.
+              </p>
+              {groups.map((g, i) => (
+                <div key={i} className="flex gap-2">
+                  <Input
+                    value={g.name}
+                    onChange={(e) => setGroups(groups.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))}
+                    placeholder="group"
+                    className="w-28"
+                  />
+                  <Input
+                    value={g.token}
+                    onChange={(e) => setGroups(groups.map((x, j) => (j === i ? { ...x, token: e.target.value } : x)))}
+                    placeholder="join token"
+                    className="font-mono"
+                  />
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    title="Generate"
+                    onClick={async () => {
+                      const t = await HostGenToken()
+                      setGroups(groups.map((x, j) => (j === i ? { ...x, token: t } : x)))
+                    }}
+                  >
+                    <RefreshCw className="h-4 w-4" />
+                  </Button>
+                  <Button variant="ghost" size="icon" title="Remove" onClick={() => setGroups(groups.filter((_, j) => j !== i))}>
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
+              ))}
+              <Button variant="outline" size="sm" onClick={() => setGroups([...groups, { name: '', token: '' }])}>
+                <Plus className="h-4 w-4" /> Add group
+              </Button>
+              <div className="space-y-1.5 pt-1">
+                <Label htmlFor="rules">Rules</Label>
+                <textarea
+                  id="rules"
+                  rows={3}
+                  value={rulesText}
+                  onChange={(e) => setRulesText(e.target.value)}
+                  placeholder={'dev->*\nguest->nas'}
+                  className={`${inputClass} h-auto py-2 font-mono`}
+                />
+                <p className="text-xs text-muted-foreground">
+                  One <span className="font-mono">src-&gt;dst</span> per line. No rules means everyone reaches everyone; the first rule
+                  makes everything else denied.
+                </p>
+              </div>
+            </div>
             {error && <p className="text-sm text-destructive">{error}</p>}
             <Button className="w-full" onClick={start} disabled={busy || !cfg.token}>
               <Play className="h-4 w-4" /> Start hosting
@@ -357,6 +443,48 @@ export default function HostView() {
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center gap-2 text-base">
+            <KeyRound className="h-4 w-4" /> Access control
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2 text-sm">
+          {(state!.config.acl?.length ?? 0) === 0 ? (
+            <p className="text-muted-foreground">No rules — every member reaches every other.</p>
+          ) : (
+            <div className="space-y-1">
+              <p className="text-muted-foreground">Default-deny except:</p>
+              {state!.config.acl!.map((r, i) => (
+                <div key={i} className="font-mono text-xs">
+                  {r.src.join(',')}-&gt;{r.dst.join(',')}
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            <span className="text-muted-foreground">Groups</span>
+            <Badge variant="muted">default</Badge>
+            {Object.keys(state!.config.groupTokens ?? {}).map((g) => (
+              <Badge key={g} variant="muted">
+                {g}
+              </Badge>
+            ))}
+          </div>
+          {Object.entries(state!.config.groupTokens ?? {}).map(([g, tok]) => (
+            <div key={g} className="flex items-center justify-between gap-2">
+              <span className="text-muted-foreground">Token · {g}</span>
+              <span className="flex items-center gap-2">
+                <span className="font-mono">{tok}</span>
+                <Button variant="ghost" size="icon" onClick={() => navigator.clipboard?.writeText(tok)} title="Copy">
+                  <Copy className="h-4 w-4" />
+                </Button>
+              </span>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-base">
             <Users className="h-4 w-4" /> Members <Badge variant="muted">{state!.peers?.length ?? 0}</Badge>
           </CardTitle>
         </CardHeader>
@@ -364,7 +492,10 @@ export default function HostView() {
           {(state!.peers?.length ?? 0) === 0 && <p className="text-sm text-muted-foreground">No members yet.</p>}
           {state!.peers?.map((p) => (
             <div key={p.public_key} className="flex items-center justify-between rounded-md px-2 py-1.5 text-sm hover:bg-accent">
-              <span className="font-medium">{p.hostname || '(unnamed)'}</span>
+              <span className="flex items-center gap-2 font-medium">
+                {p.hostname || '(unnamed)'}
+                {p.group && <Badge variant="muted">{p.group}</Badge>}
+              </span>
               <span className="font-mono text-muted-foreground">{p.assigned_ip}</span>
             </div>
           ))}
@@ -384,8 +515,11 @@ export default function HostView() {
               <span className="font-mono">
                 {s.name}.{state!.config.dnsSuffix}
               </span>
-              <span className="font-mono text-muted-foreground">
-                {s.node_ip}:{s.port}/{s.proto}
+              <span className="flex items-center gap-2">
+                {(s.allow_groups?.length ?? 0) > 0 && <Badge variant="muted">{s.allow_groups!.join(', ')}</Badge>}
+                <span className="font-mono text-muted-foreground">
+                  {s.node_ip}:{s.port}/{s.proto}
+                </span>
               </span>
             </div>
           ))}

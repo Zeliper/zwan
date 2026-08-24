@@ -22,6 +22,9 @@ type Member struct {
 	// device presents it on every later control call, so the server knows which
 	// member is asking (the join token only proves the right to join at all).
 	Token string
+
+	// Group is the access-control group, decided by which join token was used.
+	Group string
 }
 
 // Service is a named service reachable at NodeIP:Port over the overlay.
@@ -31,6 +34,7 @@ type Service struct {
 	Port        int
 	BackendPort int
 	NodeIP      string
+	AllowGroups []string
 }
 
 // Network is one overlay network with its members and services.
@@ -80,6 +84,22 @@ func (n *Network) MemberByToken(token string) (*Member, bool) {
 	defer n.mu.RUnlock()
 	m, ok := n.byToken[token]
 	return m, ok
+}
+
+// MemberByIP returns the member holding an overlay address, which is how a
+// service is traced back to the group of the node hosting it.
+func (n *Network) MemberByIP(ip string) (*Member, bool) {
+	if ip == "" {
+		return nil, false
+	}
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	for _, m := range n.members {
+		if m.AssignedIP == ip {
+			return m, true
+		}
+	}
+	return nil, false
 }
 
 // Members returns a snapshot of the network's members.

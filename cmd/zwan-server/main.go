@@ -18,16 +18,19 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"os/signal"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/Zeliper/zwan/client/update"
 	"github.com/Zeliper/zwan/server/host"
 	"github.com/Zeliper/zwan/shared"
+	"github.com/Zeliper/zwan/shared/acl"
 )
 
 func main() {
@@ -61,12 +64,25 @@ func runHeadless() {
 	acmeDirectory := flag.String("acme-directory", "", "ACME directory URL override (e.g. Let's Encrypt staging)")
 	acmeHTTPAddr := flag.String("acme-http-addr", ":80", "HTTP-01 challenge listen address (used when --addr is not :443)")
 	publicHost := flag.String("public-host", "", "host:port clients should connect to, for the printed join address")
+	var joinTokens repeatable
+	flag.Var(&joinTokens, "join-token", "extra join token in the form <group>=<token>; repeat for more groups")
+	var aclRules repeatable
+	flag.Var(&aclRules, "acl", "access rule in the form <src groups>-><dst groups>, e.g. dev->*; repeat for more rules")
+	aclFile := flag.String("acl-file", "", "JSON policy document with the same rules, for larger policies")
 	autoUpdate := flag.Bool("auto-update", false, "periodically self-update to the latest release and restart")
 	updateEvery := flag.Duration("auto-update-interval", 6*time.Hour, "how often to check for updates with --auto-update")
 	flag.Parse()
 
 	if *token == "" {
 		log.Fatal("--token is required")
+	}
+	groupTokens, err := parseJoinTokens(joinTokens)
+	if err != nil {
+		log.Fatal(err)
+	}
+	rules, err := parsePolicy(aclRules, *aclFile)
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	h := host.New()
@@ -85,6 +101,8 @@ func runHeadless() {
 		ACMEEmail:     *acmeEmail,
 		ACMEDirectory: *acmeDirectory,
 		ACMEHTTPAddr:  *acmeHTTPAddr,
+		GroupTokens:   groupTokens,
+		ACL:           rules,
 	}); err != nil {
 		log.Fatalf("start: %v", err)
 	}
@@ -92,6 +110,7 @@ func runHeadless() {
 	log.Printf("%s (%s) %s: control on %s (%s), relay on %s (network=%s suffix=%s cidr=%s)",
 		shared.ProductName, shared.ComponentServer, shared.Version, *addr, trustLabel(h), *relayAddr, *netID, *suffix, *cidr)
 	log.Printf("clients join with: --server %q --token <token>", h.JoinURL(*publicHost))
+	logPolicy(groupTokens, rules)
 	if h.TLSMode() == "off" {
 		log.Print("WARNING: TLS is off - the join token and the whole control channel are sent in the clear")
 	}
@@ -174,4 +193,73 @@ func trustLabel(h *host.Host) string {
 	default:
 		return h.TLSMode()
 	}
+}
+
+// repeatable collects a flag given more than once.
+type repeatable []string
+
+func (r *repeatable) String() string     { return strings.Join(*r, ", ") }
+func (r *repeatable) Set(v string) error { *r = append(*r, v); return nil }
+
+// parseJoinTokens turns the "<group>=<token>" flags into a group -> token map.
+func parseJoinTokens(values []string) (map[string]string, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	out := map[string]string{}
+	for _, v := range values {
+		group, token, err := acl.ParseJoinToken(v)
+		if err != nil {
+			return nil, err
+		}
+		if prev, ok := out[group]; ok && prev != token {
+			return nil, fmt.Errorf("group %q was given two different join tokens", group)
+		}
+		out[group] = token
+	}
+	return out, nil
+}
+
+// parsePolicy merges the shorthand --acl rules with an optional policy file.
+func parsePolicy(values []string, file string) ([]acl.Rule, error) {
+	var rules []acl.Rule
+	for _, v := range values {
+		r, err := acl.ParseRule(v)
+		if err != nil {
+			return nil, err
+		}
+		rules = append(rules, r)
+	}
+	if file != "" {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			return nil, fmt.Errorf("read ACL policy: %w", err)
+		}
+		p, err := acl.Parse(data)
+		if err != nil {
+			return nil, err
+		}
+		rules = append(rules, p.Rules...)
+	}
+	return rules, nil
+}
+
+// logPolicy states the access model at startup, so an operator can see whether
+// the network is open or restricted without reading the flags back.
+func logPolicy(groupTokens map[string]string, rules []acl.Rule) {
+	groups := []string{acl.DefaultGroup}
+	for g := range groupTokens {
+		groups = append(groups, g)
+	}
+	sort.Strings(groups)
+	if len(rules) == 0 {
+		log.Printf("access: no rules - every member reaches every other (groups: %s)", strings.Join(groups, ", "))
+		return
+	}
+	shown := make([]string, 0, len(rules))
+	for _, r := range rules {
+		shown = append(shown, r.String())
+	}
+	log.Printf("access: default-deny with %d rule(s): %s (groups: %s)",
+		len(rules), strings.Join(shown, "; "), strings.Join(groups, ", "))
 }

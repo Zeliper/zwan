@@ -15,6 +15,7 @@ import (
 
 	"github.com/Zeliper/zwan/server/host"
 	"github.com/Zeliper/zwan/shared"
+	"github.com/Zeliper/zwan/shared/acl"
 )
 
 // FileName is the config file's name inside the machine state directory.
@@ -32,6 +33,15 @@ type Config struct {
 	TLSMode     string   `json:"tlsMode"`
 	Domains     []string `json:"domains"`
 	PublicHost  string   `json:"publicHost"`
+
+	// GroupTokens maps an access-control group to the join token that admits
+	// members into it. Token above is the token for the default group; with no
+	// extra groups and no rules, every member reaches every other.
+	GroupTokens map[string]string `json:"groupTokens,omitempty"`
+
+	// ACL is the rule set between groups. One rule is enough to make the
+	// network default-deny.
+	ACL []acl.Rule `json:"acl,omitempty"`
 
 	// AutoStart makes the service bring the network up on boot. It is false
 	// until an operator has actually configured and started a network once.
@@ -121,5 +131,7 @@ func (c Config) Host() host.Config {
 		RelayPublic: c.RelayPublic,
 		TLSMode:     c.TLSMode,
 		TLSDomains:  c.Domains,
+		GroupTokens: c.GroupTokens,
+		ACL:         c.ACL,
 	}
 }

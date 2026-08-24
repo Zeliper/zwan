@@ -34,6 +34,10 @@ export function HostStop() {
   return window['go']['main']['App']['HostStop']();
 }
 
+export function ParseACL(arg1) {
+  return window['go']['main']['App']['ParseACL'](arg1);
+}
+
 export function QuitApp() {
   return window['go']['main']['App']['QuitApp']();
 }

@@ -31,6 +31,11 @@ type Peer struct {
 	PublicKey  string `json:"public_key"`
 	AssignedIP string `json:"assigned_ip"`
 	Endpoint   string `json:"endpoint,omitempty"` // host:port for WireGuard (M1b-2)
+
+	// Group is the access-control group this member joined into. It travels to
+	// clients because a node hosting a service checks the group of whoever
+	// connects to it.
+	Group string `json:"group,omitempty"`
 }
 
 // PeersResponse lists the members of a network.
@@ -47,6 +52,10 @@ type Service struct {
 	Port        int    `json:"port"`                   // port reachable over the overlay (e.g. 25565)
 	BackendPort int    `json:"backend_port,omitempty"` // localhost-only backend port on the host (0 = none)
 	NodeIP      string `json:"node_ip"`
+
+	// AllowGroups restricts the service to these groups. Empty means every
+	// member who can reach the hosting node may use it.
+	AllowGroups []string `json:"allow_groups,omitempty"`
 }
 
 // RegisterServiceRequest publishes (or updates) a service. The caller is

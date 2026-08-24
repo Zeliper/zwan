@@ -222,6 +222,7 @@ func (e *Engine) run(cl *join.Client, dev *wg.Device, ad *tun.Adapter, rslv *res
 
 	routed := map[string]bool{}
 	hostProxies := map[string]*l4.TCPProxy{}
+	access := &l4.AccessPolicy{}
 	var lastSig string
 	var curPeers []wg.Peer
 
@@ -264,7 +265,8 @@ func (e *Engine) run(cl *join.Client, dev *wg.Device, ad *tun.Adapter, rslv *res
 
 		svcs, _ := cl.Services()
 		updateDNS(rslv, suffix, peers, svcs)
-		manageHostProxies(hostProxies, selfIP, svcs)
+		access.Set(peers, svcs)
+		manageHostProxies(hostProxies, selfIP, svcs, access)
 
 		hs := handshakeMap(dev, curPeers)
 		e.mu.Lock()
@@ -328,7 +330,10 @@ func updateDNS(rslv *resolver.Resolver, suffix string, peers []proto.Peer, svcs 
 	rslv.SetRecords(recs)
 }
 
-func manageHostProxies(running map[string]*l4.TCPProxy, selfIP string, svcs []proto.Service) {
+// manageHostProxies starts an L4 proxy for each service hosted on this node.
+// The proxy consults access on every connection, so the service's allow list is
+// enforced here and not only by what the control server chooses to advertise.
+func manageHostProxies(running map[string]*l4.TCPProxy, selfIP string, svcs []proto.Service, access *l4.AccessPolicy) {
 	for _, s := range svcs {
 		if s.NodeIP != selfIP || s.BackendPort == 0 || strings.ToLower(s.Proto) != "tcp" {
 			continue
@@ -338,7 +343,7 @@ func manageHostProxies(running map[string]*l4.TCPProxy, selfIP string, svcs []pr
 		}
 		listen := fmt.Sprintf("%s:%d", selfIP, s.Port)
 		backend := fmt.Sprintf("127.0.0.1:%d", s.BackendPort)
-		p, err := l4.ListenTCP(listen, backend)
+		p, err := l4.ListenTCP(listen, backend, access.Filter(s.Name))
 		if err != nil {
 			log.Printf("engine: service %s proxy on %s: %v", s.Name, listen, err)
 			continue
