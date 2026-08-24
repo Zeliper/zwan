@@ -1,0 +1,7 @@
+* text=auto eol=lf
+*.go text eol=lf
+*.md text eol=lf
+*.exe binary
+*.dll binary
+*.png binary
+*.ico binary

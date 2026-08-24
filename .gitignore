@@ -1,0 +1,38 @@
+# Go
+/bin/
+*.exe
+*.exe~
+*.dll
+*.test
+*.out
+vendor/
+go.work
+go.work.sum
+
+# Wails / frontend
+frontend/node_modules/
+frontend/dist/
+build/bin/
+build/windows/installer/
+node_modules/
+
+# Wintun redistributable (vendored at build time, not committed)
+wintun.dll
+
+# Local state / secrets
+*.key
+*.pem
+*.db
+*.sqlite
+node.key
+config.local.json
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# OMC / local agent state
+.omc/
+.claude/
