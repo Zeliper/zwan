@@ -10,8 +10,11 @@ import (
 	"github.com/Zeliper/zwan/client/engine"
 	"github.com/Zeliper/zwan/client/ipc"
 	"github.com/Zeliper/zwan/client/join"
+	"github.com/Zeliper/zwan/client/update"
 	"github.com/Zeliper/zwan/server/host"
+	"github.com/Zeliper/zwan/shared"
 	"github.com/Zeliper/zwan/shared/proto"
+	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // App is the Wails backend. It is both a client control surface (over the engine
@@ -119,6 +122,33 @@ func (a *App) HostStatus() *HostState {
 		}
 	}
 	return st
+}
+
+// ---- version / auto-update ----
+
+// Version returns the app version.
+func (a *App) Version() string { return shared.Version }
+
+// CheckUpdate returns a newer release if one is available, else nil.
+func (a *App) CheckUpdate() *update.Release {
+	rel, err := update.Latest()
+	if err != nil || rel == nil {
+		return nil
+	}
+	if !update.IsNewer(shared.Version, rel.Version) {
+		return nil
+	}
+	return rel
+}
+
+// ApplyUpdate downloads and launches the latest installer (silent, elevated).
+func (a *App) ApplyUpdate(installerURL string) error { return update.Apply(installerURL) }
+
+// QuitApp exits the application (used after launching an update).
+func (a *App) QuitApp() {
+	if a.ctx != nil {
+		wruntime.Quit(a.ctx)
+	}
 }
 
 // localAddr rewrites a wildcard listen address to loopback for local queries.

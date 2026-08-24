@@ -149,3 +149,26 @@ export namespace proto {
 
 }
 
+export namespace update {
+	
+	export class Release {
+	    tag: string;
+	    version: string;
+	    installerUrl: string;
+	    notes: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Release(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.tag = source["tag"];
+	        this.version = source["version"];
+	        this.installerUrl = source["installerUrl"];
+	        this.notes = source["notes"];
+	    }
+	}
+
+}
+

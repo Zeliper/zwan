@@ -1,13 +1,41 @@
-import { useState } from 'react'
-import { Network } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Download, Network } from 'lucide-react'
 import { ThemeToggle } from '@/components/theme-toggle'
+import { Button } from '@/components/ui/button'
 import ClientView from './ClientView'
 import HostView from './HostView'
+import { ApplyUpdate, CheckUpdate, QuitApp } from '../wailsjs/go/main/App'
 
 type Mode = 'client' | 'host'
 
+interface Release {
+  tag: string
+  version: string
+  installerUrl: string
+  notes: string
+}
+
 export default function App() {
   const [mode, setMode] = useState<Mode>('client')
+  const [update, setUpdate] = useState<Release | null>(null)
+  const [updating, setUpdating] = useState(false)
+
+  useEffect(() => {
+    CheckUpdate()
+      .then((r) => setUpdate((r as unknown as Release) ?? null))
+      .catch(() => {})
+  }, [])
+
+  async function doUpdate() {
+    if (!update) return
+    setUpdating(true)
+    try {
+      await ApplyUpdate(update.installerUrl)
+      await QuitApp()
+    } catch {
+      setUpdating(false)
+    }
+  }
 
   const tab = (m: Mode, label: string) => (
     <button
@@ -40,6 +68,17 @@ export default function App() {
           <ThemeToggle />
         </div>
       </header>
+
+      {update && (
+        <div className="flex items-center justify-between gap-3 border-b bg-primary/10 px-6 py-2 text-sm">
+          <span className="flex items-center gap-2">
+            <Download className="h-4 w-4" /> Update available: <span className="font-semibold">v{update.version}</span>
+          </span>
+          <Button size="sm" onClick={doUpdate} disabled={updating || !update.installerUrl}>
+            {updating ? 'Updating…' : 'Update now'}
+          </Button>
+        </div>
+      )}
 
       <main className="mx-auto w-full max-w-3xl p-6">
         {mode === 'client' ? <ClientView /> : <HostView />}
