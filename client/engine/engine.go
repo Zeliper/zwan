@@ -35,8 +35,14 @@ type Config struct {
 	UseRelay    bool
 	AdapterName string // default "<Product>-<network>"
 	WGPort      int    // direct-mode UDP listen port (default 51820)
+	Endpoint    string // host:port peers reach us at (default 127.0.0.1:<WGPort>)
 	DNSAddr     string // local resolver address ("" disables it)
 	ProductName string // for the default adapter name
+
+	// Publish are services this node hosts. The engine keeps them registered:
+	// the control server's registry is in memory, so a server restart drops
+	// them and the next refresh puts them back.
+	Publish []proto.Service
 }
 
 // Status is a snapshot of the connection for the UI/IPC.
@@ -109,7 +115,10 @@ func (e *Engine) Start(cfg Config) error {
 		return err
 	}
 
-	endpoint := fmt.Sprintf("127.0.0.1:%d", cfg.WGPort)
+	endpoint := cfg.Endpoint
+	if endpoint == "" {
+		endpoint = fmt.Sprintf("127.0.0.1:%d", cfg.WGPort)
+	}
 	res, err := cl.Join(cfg.Token, cfg.DeviceUUID, cfg.Name, endpoint)
 	if err != nil {
 		e.setErr("join: %v", err)
@@ -264,6 +273,7 @@ func (e *Engine) run(cl *join.Client, dev *wg.Device, ad *tun.Adapter, rslv *res
 		}
 
 		svcs, _ := cl.Services()
+		svcs = republish(cl, cfg.Publish, svcs, selfIP)
 		updateDNS(rslv, suffix, peers, svcs)
 		access.Set(peers, svcs)
 		manageHostProxies(hostProxies, selfIP, svcs, access)
@@ -285,6 +295,33 @@ func (e *Engine) run(cl *join.Client, dev *wg.Device, ad *tun.Adapter, rslv *res
 			apply()
 		}
 	}
+}
+
+// republish re-registers any service this node hosts that the server does not
+// currently list, and returns the list including them. The registry lives in the
+// server's memory, so this is what makes a hosted service survive a control
+// server restart without the operator noticing.
+func republish(cl *join.Client, want []proto.Service, have []proto.Service, selfIP string) []proto.Service {
+	if len(want) == 0 {
+		return have
+	}
+	listed := make(map[string]bool, len(have))
+	for _, s := range have {
+		listed[s.Name] = true
+	}
+	for _, s := range want {
+		if listed[s.Name] {
+			continue
+		}
+		s.NodeIP = selfIP
+		if err := cl.PublishService(s); err != nil {
+			log.Printf("engine: publish %s: %v", s.Name, err)
+			continue
+		}
+		log.Printf("engine: published service %s on %s:%d/%s", s.Name, selfIP, s.Port, s.Proto)
+		have = append(have, s)
+	}
+	return have
 }
 
 func peerSig(peers []wg.Peer) string {
