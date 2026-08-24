@@ -3,8 +3,17 @@
 // It runs the control API + relay for a single network. The desktop GUI can host
 // the same server in-process (server/host); this binary is for VPS / headless use.
 //
-// Subcommand:  zwan-server update   -> self-update to the latest release and exit.
-// Flag:        --auto-update        -> periodically self-update and restart.
+// Subcommands:
+//
+//	zwan-server update            self-update to the latest release and exit
+//	zwan-server service install   register the Windows service (Administrator)
+//	zwan-server service <cmd>     uninstall | start | stop | run
+//
+// Flag: --auto-update  -> periodically self-update and restart.
+//
+// On Windows the service hosts the same network from a saved configuration and
+// is driven by the tray/GUI over a named pipe (server/ipc); on Linux the binary
+// runs headless from flags under systemd.
 package main
 
 import (
@@ -26,7 +35,17 @@ func main() {
 		runUpdate()
 		return
 	}
+	if handleServiceCommand(os.Args[1:]) {
+		return
+	}
+	if runAsService() {
+		return
+	}
+	runHeadless()
+}
 
+// runHeadless is the flag-driven foreground mode used on a VPS.
+func runHeadless() {
 	addr := flag.String("addr", "127.0.0.1:8787", "control API listen address (use :443 with --domain for ACME)")
 	netID := flag.String("network", "demo", "network id")
 	suffix := flag.String("dns-suffix", "demo.zwan", "DNS suffix / namespace for this network")

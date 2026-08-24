@@ -5,12 +5,14 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
-	"strings"
+	"sync"
 
 	"github.com/Zeliper/zwan/client/engine"
 	"github.com/Zeliper/zwan/client/ipc"
 	"github.com/Zeliper/zwan/client/update"
-	"github.com/Zeliper/zwan/server/host"
+	serverconfig "github.com/Zeliper/zwan/server/config"
+	serveripc "github.com/Zeliper/zwan/server/ipc"
+	"github.com/Zeliper/zwan/server/supervisor"
 	"github.com/Zeliper/zwan/shared"
 	"github.com/Zeliper/zwan/shared/proto"
 	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -20,13 +22,14 @@ import (
 // service via client/ipc) and an in-process server host (server/host), so one
 // app can join networks and host one.
 type App struct {
-	ctx        context.Context
-	srv        *host.Host
-	publicHost string // host:port to advertise in the join address
+	ctx context.Context
+
+	mu  sync.Mutex
+	srv *supervisor.Supervisor // in-process fallback; nil until the service is missing
 }
 
 // NewApp creates the App.
-func NewApp() *App { return &App{srv: host.New()} }
+func NewApp() *App { return &App{} }
 
 func (a *App) startup(ctx context.Context) { a.ctx = ctx }
 
@@ -70,22 +73,29 @@ func (a *App) Status() (*engine.Status, error) {
 	return resp.Status, nil
 }
 
-// ---- server (in-process host) ----
+// ---- server (control-server service, or in-process as a fallback) ----
 
 // HostState is the server view for the frontend.
 type HostState struct {
-	Running     bool            `json:"running"`
-	NetworkID   string          `json:"networkId"`
-	DNSSuffix   string          `json:"dnsSuffix"`
-	CIDR        string          `json:"cidr"`
-	Token       string          `json:"token"`
-	ControlAddr string          `json:"controlAddr"`
-	RelayAddr   string          `json:"relayAddr"`
-	TLSMode     string          `json:"tlsMode"` // "self", "acme" or "off"
-	Pin         string          `json:"pin"`     // key fingerprint clients must pin
-	JoinURL     string          `json:"joinUrl"` // server address + pin, ready to hand out
-	Peers       []proto.Peer    `json:"peers"`
-	Services    []proto.Service `json:"services"`
+	Running   bool                `json:"running"`
+	Config    serverconfig.Config `json:"config"`
+	TLSMode   string              `json:"tlsMode"` // "self", "acme" or "off"
+	Pin       string              `json:"pin"`     // key fingerprint clients must pin
+	JoinURL   string              `json:"joinUrl"` // server address + pin, ready to hand out
+	Peers     []proto.Peer        `json:"peers"`
+	Services  []proto.Service     `json:"services"`
+	LastError string              `json:"lastError"`
+
+	// ManagedByService is false when this app is hosting the network itself
+	// because the server service is not installed — the network then stops when
+	// the app quits, and the UI says so.
+	ManagedByService bool `json:"managedByService"`
+}
+
+// ServerServiceUp reports whether the control-server service is reachable.
+func (a *App) ServerServiceUp() bool {
+	_, err := serveripc.Status()
+	return err == nil
 }
 
 // HostGenToken returns a fresh random join token.
@@ -95,39 +105,63 @@ func (a *App) HostGenToken() string {
 	return hex.EncodeToString(b)
 }
 
-// HostStart starts hosting a network in-process. tlsMode is "auto", "self",
-// "acme" or "off"; domain is a comma-separated list of public hostnames for an
-// ACME certificate, and publicHost overrides the address shown to joiners.
-func (a *App) HostStart(networkID, suffix, cidr, token, controlAddr, relayAddr, tlsMode, domain, publicHost string) error {
-	a.publicHost = strings.TrimSpace(publicHost)
-	return a.srv.Start(host.Config{
-		NetworkID:   networkID,
-		DNSSuffix:   suffix,
-		CIDR:        cidr,
-		Token:       token,
-		ControlAddr: controlAddr,
-		RelayAddr:   relayAddr,
-		TLSMode:     tlsMode,
-		TLSDomains:  splitList(domain),
-	})
+// HostStart starts hosting a network, preferring the service so the network
+// outlives this window.
+func (a *App) HostStart(cfg serverconfig.Config) error {
+	if a.ServerServiceUp() {
+		resp, err := serveripc.Start(cfg)
+		if err != nil {
+			return err
+		}
+		if !resp.OK {
+			return errors.New(resp.Error)
+		}
+		return nil
+	}
+	return a.local().Start(cfg)
 }
 
 // HostStop stops hosting.
-func (a *App) HostStop() { a.srv.Stop() }
+func (a *App) HostStop() error {
+	if a.ServerServiceUp() {
+		resp, err := serveripc.Stop()
+		if err != nil {
+			return err
+		}
+		if !resp.OK {
+			return errors.New(resp.Error)
+		}
+		return nil
+	}
+	return a.local().Stop()
+}
 
 // HostStatus returns the hosting state plus current members and services.
 func (a *App) HostStatus() *HostState {
-	c := a.srv.Config()
-	st := &HostState{
-		Running: a.srv.Running(), NetworkID: c.NetworkID, DNSSuffix: c.DNSSuffix, CIDR: c.CIDR,
-		Token: c.Token, ControlAddr: c.ControlAddr, RelayAddr: c.RelayAddr,
-		TLSMode: a.srv.TLSMode(), Pin: a.srv.Pin(), JoinURL: a.srv.JoinURL(a.publicHost),
+	if a.ServerServiceUp() {
+		if resp, err := serveripc.Status(); err == nil && resp.State != nil {
+			return hostState(*resp.State, true)
+		}
 	}
-	if a.srv.Running() {
-		st.Peers = a.srv.Members()
-		st.Services = a.srv.Services()
+	return hostState(a.local().State(), false)
+}
+
+// local lazily creates the in-process supervisor used when the service is absent.
+func (a *App) local() *supervisor.Supervisor {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.srv == nil {
+		a.srv = supervisor.New()
 	}
-	return st
+	return a.srv
+}
+
+func hostState(st serveripc.State, managed bool) *HostState {
+	return &HostState{
+		Running: st.Running, Config: st.Config, TLSMode: st.TLSMode, Pin: st.Pin,
+		JoinURL: st.JoinURL, Peers: st.Peers, Services: st.Services, LastError: st.LastError,
+		ManagedByService: managed,
+	}
 }
 
 // ---- version / auto-update ----
@@ -155,15 +189,4 @@ func (a *App) QuitApp() {
 	if a.ctx != nil {
 		wruntime.Quit(a.ctx)
 	}
-}
-
-// splitList parses a comma-separated field from the UI.
-func splitList(s string) []string {
-	var out []string
-	for _, p := range strings.Split(s, ",") {
-		if p = strings.TrimSpace(p); p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
 }

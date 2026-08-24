@@ -3,7 +3,7 @@
 #
 #   scripts/build-release.sh 0.1.1
 #
-# Produces: dist/zwan-setup.exe (Windows client installer: GUI + service + Wintun),
+# Produces: dist/zwan-setup.exe (Windows installer: app + client engine/Wintun + server service),
 #           dist/zwan-server-{windows-amd64.exe,windows-arm64.exe,linux-amd64,linux-arm64},
 #           dist/SHA256SUMS.txt
 set -euo pipefail
@@ -23,8 +23,9 @@ if [ ! -f bin/wintun.dll ]; then
   exit 1
 fi
 
-echo "== service (windows/amd64, for the installer) =="
+echo "== services (windows/amd64, for the installer) =="
 go build -ldflags "$LD" -o installer/stage/zwan-service.exe ./cmd/zwan-service
+go build -ldflags "$LD" -o installer/stage/zwan-server.exe  ./cmd/zwan-server
 cp bin/wintun.dll installer/stage/wintun.dll
 
 echo "== server (matrix: windows/linux x amd64/arm64) =="

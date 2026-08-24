@@ -30,7 +30,7 @@ Tailscale/ZeroTier 계열이되, **컨트롤 플레인을 직접 운영**하고 
 - 🧭 **이름 기반 접속** — Split-DNS 리졸버가 `서비스.<서픽스>` 를 올바른 노드로 해석
 - 🚪 **L4 서비스 라우터** — 서비스 게시 시 실제 백엔드는 `127.0.0.1`에만 바인딩(LAN/인터넷 미노출)
 - 🔀 **다중 네트워크 클라이언트** *(진행 중)* — 한 클라이언트, 여러 독립 네트워크, 주소/DNS 충돌 없이
-- 🖥️ **데스크톱 앱** — 시스템 트레이 클라이언트 + **시스템 다크/라이트 테마**. 터널은 SYSTEM 서비스가 담당
+- 🖥️ **데스크톱 앱** — 가입/호스팅 두 역할을 한 트레이 앱에서 + **시스템 다크/라이트 테마**. 실제 동작은 SYSTEM 서비스가 담당
 - ⬆️ **자동 업데이트** — 클라이언트는 GitHub 릴리스로 자동 업데이트, 서버도 자가 업데이트(`--auto-update`)
 
 ## 동작 방식
@@ -40,17 +40,21 @@ Tailscale/ZeroTier 계열이되, **컨트롤 플레인을 직접 운영**하고 
 서버도 신원 확인이 된다.
 
 컨트롤 플레인(서버)은 멤버십·엔드포인트·서비스·DNS 정보만 교환한다. 데이터플레인은 P2P WireGuard이며,
-직접 도달이 안 되면 공인 IP를 가진 서버가 패킷을 릴레이한다. Windows에서는 터널을 **SYSTEM 서비스**
-(`zwan-service`)가 돌리고, **트레이/GUI**는 사용자 권한으로 named-pipe를 통해 서비스와 통신한다.
+직접 도달이 안 되면 공인 IP를 가진 서버가 패킷을 릴레이한다. Windows에서는 두 역할 모두 **SYSTEM 서비스**로 돈다 — 터널은 `zwanEngine`(`zwan-service.exe`),
+호스팅은 `zwanServer`(`zwan-server.exe`). **트레이/GUI**는 사용자 권한으로 각각의 named-pipe를 통해
+통신하므로, 창을 닫아도 터널과 호스팅은 그대로 유지된다.
 
 ## 설치
 
 [Releases](https://github.com/Zeliper/zwan/releases)에서 받는다.
 
-- **Windows 클라이언트** — `zwan-setup.exe`: 트레이 앱 + SYSTEM 엔진 서비스 + Wintun 가상 WAN
-  드라이버를 설치하고 로그인 시 시작. 이후 자동 업데이트. *(미서명 빌드라 SmartScreen 경고 시 "추가 정보 → 실행")*
-- **서버**(공인 IP 머신에서 호스팅) — 헤드리스 바이너리:
-  `zwan-server-linux-amd64/arm64`, `zwan-server-windows-amd64/arm64.exe`
+- **Windows** — `zwan-setup.exe`: 트레이 앱을 깔고 역할을 고른다(둘 다 선택 가능).
+  - **Client** — `zwanEngine` 서비스 + Wintun 가상 WAN 드라이버. 네트워크 가입용.
+  - **Server** — `zwanServer` 서비스. 네트워크 호스팅용. 이것만 고르면 터널 드라이버 없이 서버만 설치된다.
+
+  로그인 시 시작하고 이후 자동 업데이트. *(미서명 빌드라 SmartScreen 경고 시 "추가 정보 → 실행")*
+- **리눅스 서버** — 헤드리스 바이너리: `zwan-server-linux-amd64/arm64`
+  (`zwan-server-windows-amd64/arm64.exe` 도 있다. 서비스 대신 터미널에서 직접 띄우고 싶을 때)
 
 ## 빠른 시작
 
@@ -82,8 +86,8 @@ clients join with: --server "https://공인IP:8787#sha256:NMuaxTGRTKlRnx..." --t
 포트에서 쓰면 HTTP-01 챌린지용 TCP `80`도 열어야 한다.
 
 **2. 클라이언트 가입:** `zwan-setup.exe` 실행 → zwan 열기 → **Join** → 출력된 가입 주소를 **Server**
-칸에 그대로 붙여넣고(지문은 자동 분리됨) 토큰 입력. 데스크톱에서 직접 호스팅하려면 **Host** 탭 사용
-(TLS 모드 선택 + 토큰·가입 주소 자동 생성).
+칸에 그대로 붙여넣고(지문은 자동 분리됨) 토큰 입력. 데스크톱에서 직접 호스팅하려면 **Host** 탭 사용 — `zwanServer` 서비스를 설정한다
+(네트워크·TLS 모드·토큰, 가입 주소 자동 생성). 창을 닫아도 계속 호스팅되며, 중지는 트레이에서도 된다.
 
 **3. 서비스 게시**(백엔드는 localhost 유지):
 ```bash

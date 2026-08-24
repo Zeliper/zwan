@@ -1,3 +1,40 @@
+export namespace config {
+	
+	export class Config {
+	    networkId: string;
+	    dnsSuffix: string;
+	    cidr: string;
+	    token: string;
+	    controlAddr: string;
+	    relayAddr: string;
+	    relayPublic: string;
+	    tlsMode: string;
+	    domains: string[];
+	    publicHost: string;
+	    autoStart: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new Config(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.networkId = source["networkId"];
+	        this.dnsSuffix = source["dnsSuffix"];
+	        this.cidr = source["cidr"];
+	        this.token = source["token"];
+	        this.controlAddr = source["controlAddr"];
+	        this.relayAddr = source["relayAddr"];
+	        this.relayPublic = source["relayPublic"];
+	        this.tlsMode = source["tlsMode"];
+	        this.domains = source["domains"];
+	        this.publicHost = source["publicHost"];
+	        this.autoStart = source["autoStart"];
+	    }
+	}
+
+}
+
 export namespace engine {
 	
 	export class Status {
@@ -63,17 +100,14 @@ export namespace main {
 	
 	export class HostState {
 	    running: boolean;
-	    networkId: string;
-	    dnsSuffix: string;
-	    cidr: string;
-	    token: string;
-	    controlAddr: string;
-	    relayAddr: string;
+	    config: config.Config;
 	    tlsMode: string;
 	    pin: string;
 	    joinUrl: string;
 	    peers: proto.Peer[];
 	    services: proto.Service[];
+	    lastError: string;
+	    managedByService: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new HostState(source);
@@ -82,17 +116,14 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.running = source["running"];
-	        this.networkId = source["networkId"];
-	        this.dnsSuffix = source["dnsSuffix"];
-	        this.cidr = source["cidr"];
-	        this.token = source["token"];
-	        this.controlAddr = source["controlAddr"];
-	        this.relayAddr = source["relayAddr"];
+	        this.config = this.convertValues(source["config"], config.Config);
 	        this.tlsMode = source["tlsMode"];
 	        this.pin = source["pin"];
 	        this.joinUrl = source["joinUrl"];
 	        this.peers = this.convertValues(source["peers"], proto.Peer);
 	        this.services = this.convertValues(source["services"], proto.Service);
+	        this.lastError = source["lastError"];
+	        this.managedByService = source["managedByService"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

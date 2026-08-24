@@ -22,8 +22,8 @@ export function HostGenToken() {
   return window['go']['main']['App']['HostGenToken']();
 }
 
-export function HostStart(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9) {
-  return window['go']['main']['App']['HostStart'](arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9);
+export function HostStart(arg1) {
+  return window['go']['main']['App']['HostStart'](arg1);
 }
 
 export function HostStatus() {
@@ -36,6 +36,10 @@ export function HostStop() {
 
 export function QuitApp() {
   return window['go']['main']['App']['QuitApp']();
+}
+
+export function ServerServiceUp() {
+  return window['go']['main']['App']['ServerServiceUp']();
 }
 
 export function ServiceUp() {

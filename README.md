@@ -32,7 +32,7 @@ independent networks at once**. Open source, no central dependency.
 - 🧭 **Name-based access** — split-DNS resolver maps `service.<your-suffix>` to the right node.
 - 🚪 **L4 service router** — publish a service and keep the real backend bound to `127.0.0.1` (never exposed on the LAN/internet).
 - 🔀 **Multi-network client** *(in progress)* — one client, several independent networks, without address/DNS collisions.
-- 🖥️ **Desktop app** — system-tray client with a **system dark/light theme**; a SYSTEM service does the tunnelling.
+- 🖥️ **Desktop app** — one tray app for both roles (join a network, host one), with a **system dark/light theme**; SYSTEM services do the work in the background.
 - ⬆️ **Auto-update** — the client updates itself from GitHub releases; the server can self-update too (`--auto-update`).
 
 ## How it works
@@ -58,21 +58,27 @@ The **control plane** (server) only exchanges membership, endpoints, service and
 records. The **data plane** is peer-to-peer WireGuard; when peers can't reach each other
 directly, packets are relayed through your server (which has the public IP).
 
-On Windows the tunnel runs in a **SYSTEM service** (`zwan-service`); the **tray/GUI** runs
-as your user and talks to the service over a named pipe.
+On Windows both roles run as **SYSTEM services** — `zwanEngine` (`zwan-service.exe`) for the
+tunnel and `zwanServer` (`zwan-server.exe`) for a hosted network — while the **tray/GUI**
+runs as your user and talks to each over its own named pipe. Closing the window changes
+nothing: the tunnel stays up and the network stays hosted.
 
 ## Install
 
 Grab the latest from **[Releases](https://github.com/Zeliper/zwan/releases)**.
 
-**Windows client** — `zwan-setup.exe`
-Installs the tray app, the SYSTEM engine service, and the Wintun virtual-WAN driver,
-and starts at login. It auto-updates from future releases.
+**Windows** — `zwan-setup.exe`
+Installs the tray app and lets you pick either role, or both:
+
+- **Client** — the `zwanEngine` service and the Wintun virtual-WAN driver, for joining networks.
+- **Server** — the `zwanServer` service, for hosting one. Pick this alone for a server box with no tunnel driver installed.
+
+It starts at login and auto-updates from future releases.
 *(The build is unsigned, so SmartScreen may warn — “More info” → “Run anyway”.)*
 
-**Server** (host your own network on a public-IP box) — headless binaries:
-`zwan-server-linux-amd64`, `zwan-server-linux-arm64`,
-`zwan-server-windows-amd64.exe`, `zwan-server-windows-arm64.exe`.
+**Linux server** — headless binaries: `zwan-server-linux-amd64`, `zwan-server-linux-arm64`
+(`zwan-server-windows-amd64.exe` and `-arm64.exe` are there too, for running the server from
+a terminal instead of the service).
 
 ## Quick start
 
@@ -111,7 +117,7 @@ ACME runs on a port other than 443, also open TCP `80` for the HTTP-01 challenge
 **2. Join from a client:**
 
 - **Desktop:** run `zwan-setup.exe`, open **zwan**, **Join** → paste the whole join address into **Server** (the pin is split out for you), add the token, connect.
-- **Or host from the desktop:** the app's **Host** tab runs a server in-process, picks the TLS mode, and shows the join address + token to share.
+- **Or host from the desktop:** the app's **Host** tab configures the `zwanServer` service — network, TLS mode, token — and shows the join address to share. The network keeps running once you close the window; the tray can stop it.
 
 **3. Publish a service** (keep the backend on localhost):
 
@@ -141,12 +147,12 @@ scripts/build-release.sh 0.1.1   # all release artifacts -> dist/
 ## Project layout
 
 ```
-cmd/            zwan-server (control plane) · zwan-agent (CLI) · zwan-service (SYSTEM service)
-server/         api · ipam · store · relay · host · tlsconf (ACME / self-signed)
+cmd/            zwan-server (control plane + Windows service) · zwan-agent (CLI) · zwan-service (engine service)
+server/         api · ipam · store · relay · host · tlsconf (ACME / self-signed) · config · ipc · supervisor
 client/         engine · tun · wg · wgbind · resolver · l4 · join · ipc · profile · update
 shared/         proto · keys · certpin (SPKI pinning)
-gui/            Wails v2 desktop app (React + Tailwind + shadcn/ui)
-installer/      NSIS installer (client + service + Wintun driver)
+gui/            Wails v2 desktop app + tray (React + Tailwind + shadcn/ui)
+installer/      NSIS installer (app + optional client and server services)
 ```
 
 ## Status & roadmap
