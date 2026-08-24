@@ -86,3 +86,45 @@ func TestRegisterAllocatesStableIPAndListsPeers(t *testing.T) {
 		t.Fatalf("want 2 peers, got %d", len(pr.Peers))
 	}
 }
+
+func TestServicesRegisterAndList(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.Close()
+
+	body, _ := json.Marshal(proto.RegisterServiceRequest{
+		Token:   "secret",
+		Service: proto.Service{Name: "minecraft", Proto: "tcp", Port: 25565, NodeIP: "100.64.0.2"},
+	})
+	resp, err := http.Post(ts.URL+"/v1/services", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("register service: want 200, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	gr, err := http.Get(ts.URL + "/v1/services")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sr proto.ServicesResponse
+	_ = json.NewDecoder(gr.Body).Decode(&sr)
+	gr.Body.Close()
+	if len(sr.Services) != 1 || sr.Services[0].Name != "minecraft" || sr.Services[0].NodeIP != "100.64.0.2" || sr.Services[0].Port != 25565 {
+		t.Fatalf("unexpected services: %+v", sr.Services)
+	}
+
+	bad, _ := json.Marshal(proto.RegisterServiceRequest{
+		Token:   "nope",
+		Service: proto.Service{Name: "x", Proto: "tcp", Port: 1, NodeIP: "100.64.0.3"},
+	})
+	r2, err := http.Post(ts.URL+"/v1/services", "application/json", bytes.NewReader(bad))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r2.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("bad token: want 401, got %d", r2.StatusCode)
+	}
+	r2.Body.Close()
+}

@@ -19,14 +19,23 @@ type Member struct {
 	JoinedAt   time.Time
 }
 
-// Network is one overlay network and its members (keyed by DeviceUUID).
+// Service is a named service reachable at NodeIP:Port over the overlay.
+type Service struct {
+	Name   string
+	Proto  string
+	Port   int
+	NodeIP string
+}
+
+// Network is one overlay network with its members and services.
 type Network struct {
 	ID          string
 	DNSSuffix   string
 	OverlayCIDR string
 
-	mu      sync.RWMutex
-	members map[string]*Member
+	mu       sync.RWMutex
+	members  map[string]*Member  // by DeviceUUID
+	services map[string]*Service // by Name
 }
 
 // NewNetwork creates an empty network.
@@ -36,6 +45,7 @@ func NewNetwork(id, dnsSuffix, overlayCIDR string) *Network {
 		DNSSuffix:   dnsSuffix,
 		OverlayCIDR: overlayCIDR,
 		members:     map[string]*Member{},
+		services:    map[string]*Service{},
 	}
 }
 
@@ -53,6 +63,24 @@ func (n *Network) Members() []*Member {
 	out := make([]*Member, 0, len(n.members))
 	for _, m := range n.members {
 		out = append(out, m)
+	}
+	return out
+}
+
+// UpsertService inserts or replaces a service by Name.
+func (n *Network) UpsertService(s *Service) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.services[s.Name] = s
+}
+
+// Services returns a snapshot of the network's services.
+func (n *Network) Services() []*Service {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	out := make([]*Service, 0, len(n.services))
+	for _, s := range n.services {
+		out = append(out, s)
 	}
 	return out
 }

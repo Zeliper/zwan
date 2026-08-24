@@ -13,6 +13,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/netip"
 	"os"
 	"os/signal"
@@ -21,6 +22,7 @@ import (
 	"time"
 
 	"github.com/Zeliper/zwan/client/join"
+	"github.com/Zeliper/zwan/client/resolver"
 	"github.com/Zeliper/zwan/client/tun"
 	"github.com/Zeliper/zwan/client/wg"
 	"github.com/Zeliper/zwan/client/wgbind"
@@ -40,6 +42,10 @@ func main() {
 	adapter := flag.String("adapter", "", "adapter name (default \"<Product>-<network>\")")
 	wgPort := flag.Int("wg-port", 51820, "local WireGuard UDP listen port (direct mode)")
 	endpoint := flag.String("endpoint", "", "endpoint host:port peers use to reach us (default 127.0.0.1:<wg-port>)")
+	dnsAddr := flag.String("dns-addr", "127.0.0.1:53", "local DNS resolver listen address (with --up; empty to disable)")
+	publishName := flag.String("publish-name", "", "publish a service of this name hosted on this node")
+	publishPort := flag.Int("publish-port", 0, "published service port (over the overlay)")
+	publishProto := flag.String("publish-proto", "tcp", "published service protocol (tcp/udp)")
 	flag.Parse()
 
 	log.Printf("%s (%s) %s", shared.ProductName, shared.ComponentAgent, shared.Version)
@@ -64,6 +70,17 @@ func main() {
 	log.Printf("node public key: %s", res.PublicKey)
 	printPeers(res.Peers)
 
+	if *publishName != "" {
+		if *publishPort == 0 {
+			log.Fatal("--publish-port is required with --publish-name")
+		}
+		svc := proto.Service{Name: *publishName, Proto: *publishProto, Port: *publishPort, NodeIP: res.Register.AssignedIP}
+		if err := join.PublishService(*server, *token, svc); err != nil {
+			log.Fatalf("publish service: %v", err)
+		}
+		log.Printf("published service %s.%s -> %s:%d/%s", svc.Name, res.Register.DNSSuffix, svc.NodeIP, svc.Port, svc.Proto)
+	}
+
 	adapterName := *adapter
 	if adapterName == "" {
 		adapterName = fmt.Sprintf("%s-%s", shared.ProductName, res.Register.NetworkID)
@@ -71,7 +88,7 @@ func main() {
 
 	switch {
 	case *useUp:
-		runTunnel(res, *server, adapterName, *wgPort, *useRelay)
+		runTunnel(res, *server, adapterName, *wgPort, *useRelay, *dnsAddr)
 	case *useTun:
 		bringUpAdapter(res, adapterName)
 	default:
@@ -105,7 +122,7 @@ func bringUpAdapter(res *join.Result, adapterName string) {
 // runTunnel (M1b-2/M1b-3): adapter + wireguard-go device + periodic peer refresh.
 // With useRelay, the tunnel is carried through the server relay (M1b-3); otherwise
 // it uses direct peer endpoints (M1b-2).
-func runTunnel(res *join.Result, serverURL, adapterName string, wgPort int, useRelay bool) {
+func runTunnel(res *join.Result, serverURL, adapterName string, wgPort int, useRelay bool, dnsAddr string) {
 	log.Printf("creating adapter %q ...", adapterName)
 	ad, err := tun.Create(adapterName, tun.DefaultMTU)
 	if err != nil {
@@ -144,8 +161,22 @@ func runTunnel(res *join.Result, serverURL, adapterName string, wgPort int, useR
 	}
 	defer dev.Close()
 
+	var rslv *resolver.Resolver
+	if dnsAddr != "" {
+		rslv = resolver.New(res.Register.DNSSuffix)
+		bound, err := rslv.Listen(dnsAddr)
+		if err != nil {
+			log.Printf("dns resolver: %v (continuing without local DNS)", err)
+			rslv = nil
+		} else {
+			go func() { _ = rslv.Serve() }()
+			defer rslv.Shutdown()
+			log.Printf("dns resolver on %s for *.%s", bound, res.Register.DNSSuffix)
+		}
+	}
+
 	stop := make(chan struct{})
-	go refreshPeers(dev, ad, serverURL, res.Register.AssignedIP, useRelay, stop)
+	go refreshPeers(dev, ad, rslv, serverURL, res.Register.DNSSuffix, res.Register.AssignedIP, useRelay, stop)
 	waitForInterrupt()
 	close(stop)
 }
@@ -156,7 +187,7 @@ func runTunnel(res *join.Result, serverURL, adapterName string, wgPort int, useR
 // The WireGuard peer set is only re-applied when it actually changes: re-sending
 // replace_peers on every tick would reset in-flight handshakes (which take a few
 // seconds) and they would never complete.
-func refreshPeers(dev *wg.Device, ad *tun.Adapter, serverURL, selfIP string, useRelay bool, stop <-chan struct{}) {
+func refreshPeers(dev *wg.Device, ad *tun.Adapter, rslv *resolver.Resolver, serverURL, suffix, selfIP string, useRelay bool, stop <-chan struct{}) {
 	routed := map[string]bool{}
 	var lastSig string
 	var curPeers []wg.Peer
@@ -209,6 +240,7 @@ func refreshPeers(dev *wg.Device, ad *tun.Adapter, serverURL, selfIP string, use
 			log.Printf("applied %d peer(s)", len(wgPeers))
 		}
 		logHandshakes(dev, curPeers)
+		updateDNS(rslv, suffix, serverURL, peers)
 	}
 
 	apply()
@@ -231,6 +263,33 @@ func peerSig(peers []wg.Peer) string {
 	}
 	sort.Strings(parts)
 	return strings.Join(parts, ",")
+}
+
+// updateDNS refreshes the local resolver's records from peers (node hostnames)
+// and the service registry, all under the network's DNS suffix.
+func updateDNS(rslv *resolver.Resolver, suffix, serverURL string, peers []proto.Peer) {
+	if rslv == nil {
+		return
+	}
+	recs := map[string]net.IP{}
+	for _, p := range peers {
+		if p.Hostname == "" {
+			continue
+		}
+		if ip := net.ParseIP(p.AssignedIP); ip != nil {
+			recs[strings.ToLower(p.Hostname)+"."+suffix] = ip
+		}
+	}
+	if svcs, err := join.FetchServices(serverURL); err == nil {
+		for _, s := range svcs {
+			if ip := net.ParseIP(s.NodeIP); ip != nil {
+				recs[strings.ToLower(s.Name)+"."+suffix] = ip
+			}
+		}
+	} else {
+		log.Printf("service refresh: %v", err)
+	}
+	rslv.SetRecords(recs)
 }
 
 // logHandshakes reports each peer's WireGuard handshake state. A non-zero

@@ -42,6 +42,7 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.HandleFunc("/healthz", s.health)
 	mux.HandleFunc("/v1/register", s.register)
 	mux.HandleFunc("/v1/peers", s.peers)
+	mux.HandleFunc("/v1/services", s.services)
 	return mux
 }
 
@@ -107,6 +108,46 @@ func (s *Server) peers(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// services handles GET (list) and POST (publish) of network services.
+func (s *Server) services(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		svcs := s.net.Services()
+		resp := proto.ServicesResponse{Services: make([]proto.Service, 0, len(svcs))}
+		for _, sv := range svcs {
+			resp.Services = append(resp.Services, proto.Service{
+				Name: sv.Name, Proto: sv.Proto, Port: sv.Port, NodeIP: sv.NodeIP,
+			})
+		}
+		sort.Slice(resp.Services, func(i, j int) bool { return resp.Services[i].Name < resp.Services[j].Name })
+		writeJSON(w, http.StatusOK, resp)
+
+	case http.MethodPost:
+		var req proto.RegisterServiceRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if s.token == "" || req.Token != s.token {
+			writeErr(w, http.StatusUnauthorized, "invalid token")
+			return
+		}
+		if req.Name == "" || req.NodeIP == "" || req.Port == 0 {
+			writeErr(w, http.StatusBadRequest, "name, node_ip and port are required")
+			return
+		}
+		protocol := req.Proto
+		if protocol == "" {
+			protocol = "tcp"
+		}
+		s.net.UpsertService(&store.Service{Name: req.Name, Proto: protocol, Port: req.Port, NodeIP: req.NodeIP})
+		writeJSON(w, http.StatusOK, proto.Service{Name: req.Name, Proto: protocol, Port: req.Port, NodeIP: req.NodeIP})
+
+	default:
+		writeErr(w, http.StatusMethodNotAllowed, "GET or POST only")
+	}
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

@@ -33,6 +33,27 @@ type PeersResponse struct {
 	Peers []Peer `json:"peers"`
 }
 
+// Service is a named service in the network, reachable at NodeIP:Port over the
+// overlay. Name is the label under the network's DNS suffix (e.g. "minecraft"
+// resolves as minecraft.<suffix>).
+type Service struct {
+	Name   string `json:"name"`
+	Proto  string `json:"proto"` // "tcp" or "udp"
+	Port   int    `json:"port"`  // port the service listens on (over the overlay)
+	NodeIP string `json:"node_ip"`
+}
+
+// RegisterServiceRequest publishes (or updates) a service.
+type RegisterServiceRequest struct {
+	Token string `json:"token"`
+	Service
+}
+
+// ServicesResponse lists a network's services.
+type ServicesResponse struct {
+	Services []Service `json:"services"`
+}
+
 // ErrorResponse is returned for non-2xx control-plane responses.
 type ErrorResponse struct {
 	Error string `json:"error"`

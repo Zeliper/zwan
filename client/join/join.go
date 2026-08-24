@@ -63,6 +63,24 @@ func FetchPeers(serverURL string) ([]proto.Peer, error) {
 	return peers.Peers, nil
 }
 
+// FetchServices returns the current services of the network.
+func FetchServices(serverURL string) ([]proto.Service, error) {
+	client := &http.Client{Timeout: 10 * time.Second}
+	var svcs proto.ServicesResponse
+	if err := getJSON(client, serverURL+"/v1/services", &svcs); err != nil {
+		return nil, err
+	}
+	return svcs.Services, nil
+}
+
+// PublishService registers (or updates) a service in the network.
+func PublishService(serverURL, token string, svc proto.Service) error {
+	client := &http.Client{Timeout: 10 * time.Second}
+	body, _ := json.Marshal(proto.RegisterServiceRequest{Token: token, Service: svc})
+	var out proto.Service
+	return postJSON(client, serverURL+"/v1/services", body, &out)
+}
+
 func postJSON(c *http.Client, url string, body []byte, out any) error {
 	resp, err := c.Post(url, "application/json", bytes.NewReader(body))
 	if err != nil {
