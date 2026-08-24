@@ -35,8 +35,7 @@ type ghRelease struct {
 	} `json:"assets"`
 }
 
-// Latest returns the newest published release and its installer asset URL.
-func Latest() (*Release, error) {
+func fetchLatest() (*ghRelease, error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", Owner, Repo)
 	req, _ := http.NewRequest(http.MethodGet, url, nil)
 	req.Header.Set("Accept", "application/vnd.github+json")
@@ -50,6 +49,15 @@ func Latest() (*Release, error) {
 	}
 	var gr ghRelease
 	if err := json.NewDecoder(resp.Body).Decode(&gr); err != nil {
+		return nil, err
+	}
+	return &gr, nil
+}
+
+// Latest returns the newest published release and its installer asset URL.
+func Latest() (*Release, error) {
+	gr, err := fetchLatest()
+	if err != nil {
 		return nil, err
 	}
 	rel := &Release{Tag: gr.TagName, Version: strings.TrimPrefix(gr.TagName, "v"), Notes: gr.Body}
