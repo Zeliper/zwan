@@ -19,7 +19,7 @@ func newTestServer(t *testing.T) *httptest.Server {
 		t.Fatal(err)
 	}
 	nw := store.NewNetwork("demo", "demo.zwan", "100.64.0.0/16")
-	return httptest.NewServer(New(nw, alloc, "secret").Routes())
+	return httptest.NewServer(New(nw, alloc, "secret", "127.0.0.1:3478").Routes())
 }
 
 func register(t *testing.T, base string, req proto.RegisterRequest) (int, proto.RegisterResponse) {

@@ -13,6 +13,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/netip"
 	"os"
 	"os/signal"
 	"sort"
@@ -22,6 +23,7 @@ import (
 	"github.com/Zeliper/zwan/client/join"
 	"github.com/Zeliper/zwan/client/tun"
 	"github.com/Zeliper/zwan/client/wg"
+	"github.com/Zeliper/zwan/client/wgbind"
 	"github.com/Zeliper/zwan/shared"
 	"github.com/Zeliper/zwan/shared/keys"
 	"github.com/Zeliper/zwan/shared/proto"
@@ -34,8 +36,9 @@ func main() {
 	name := flag.String("name", "", "hostname label (defaults to OS hostname)")
 	useTun := flag.Bool("tun", false, "create the adapter and assign the overlay IP (Administrator)")
 	useUp := flag.Bool("up", false, "create the adapter and start the WireGuard tunnel to peers (Administrator)")
+	useRelay := flag.Bool("relay", false, "route the tunnel through the server relay instead of direct endpoints")
 	adapter := flag.String("adapter", "", "adapter name (default \"<Product>-<network>\")")
-	wgPort := flag.Int("wg-port", 51820, "local WireGuard UDP listen port")
+	wgPort := flag.Int("wg-port", 51820, "local WireGuard UDP listen port (direct mode)")
 	endpoint := flag.String("endpoint", "", "endpoint host:port peers use to reach us (default 127.0.0.1:<wg-port>)")
 	flag.Parse()
 
@@ -68,7 +71,7 @@ func main() {
 
 	switch {
 	case *useUp:
-		runTunnel(res, *server, adapterName, *wgPort)
+		runTunnel(res, *server, adapterName, *wgPort, *useRelay)
 	case *useTun:
 		bringUpAdapter(res, adapterName)
 	default:
@@ -99,8 +102,10 @@ func bringUpAdapter(res *join.Result, adapterName string) {
 	waitForInterrupt()
 }
 
-// runTunnel (M1b-2): adapter + wireguard-go device + periodic peer refresh.
-func runTunnel(res *join.Result, serverURL, adapterName string, wgPort int) {
+// runTunnel (M1b-2/M1b-3): adapter + wireguard-go device + periodic peer refresh.
+// With useRelay, the tunnel is carried through the server relay (M1b-3); otherwise
+// it uses direct peer endpoints (M1b-2).
+func runTunnel(res *join.Result, serverURL, adapterName string, wgPort int, useRelay bool) {
 	log.Printf("creating adapter %q ...", adapterName)
 	ad, err := tun.Create(adapterName, tun.DefaultMTU)
 	if err != nil {
@@ -111,16 +116,36 @@ func runTunnel(res *join.Result, serverURL, adapterName string, wgPort int) {
 	if err := ad.SetNodeIP(res.Register.AssignedIP); err != nil {
 		log.Fatalf("assign overlay IP: %v", err)
 	}
-	dev, err := wg.Up(ad, res.Private, wgPort)
-	if err != nil {
-		log.Fatalf("wireguard: %v", err)
+
+	var dev *wg.Device
+	if useRelay {
+		if res.Register.RelayAddr == "" {
+			log.Fatal("--relay set but the server did not advertise a relay address")
+		}
+		selfIP, err := netip.ParseAddr(res.Register.AssignedIP)
+		if err != nil {
+			log.Fatalf("parse assigned IP: %v", err)
+		}
+		bind, err := wgbind.NewRelay(res.Register.RelayAddr, selfIP)
+		if err != nil {
+			log.Fatalf("relay bind: %v", err)
+		}
+		dev, err = wg.Up(ad, res.Private, wgPort, bind)
+		if err != nil {
+			log.Fatalf("wireguard: %v", err)
+		}
+		log.Printf("tunnel up on %q (%s) via relay %s. Ctrl+C to stop.", adapterName, res.Register.AssignedIP, res.Register.RelayAddr)
+	} else {
+		dev, err = wg.Up(ad, res.Private, wgPort, wgbind.New())
+		if err != nil {
+			log.Fatalf("wireguard: %v", err)
+		}
+		log.Printf("tunnel up on %q (%s), wg-port %d, direct. Ctrl+C to stop.", adapterName, res.Register.AssignedIP, wgPort)
 	}
 	defer dev.Close()
 
-	log.Printf("tunnel up on %q (%s), wg-port %d. Ctrl+C to stop.", adapterName, res.Register.AssignedIP, wgPort)
-
 	stop := make(chan struct{})
-	go refreshPeers(dev, ad, serverURL, res.Register.AssignedIP, stop)
+	go refreshPeers(dev, ad, serverURL, res.Register.AssignedIP, useRelay, stop)
 	waitForInterrupt()
 	close(stop)
 }
@@ -131,7 +156,7 @@ func runTunnel(res *join.Result, serverURL, adapterName string, wgPort int) {
 // The WireGuard peer set is only re-applied when it actually changes: re-sending
 // replace_peers on every tick would reset in-flight handshakes (which take a few
 // seconds) and they would never complete.
-func refreshPeers(dev *wg.Device, ad *tun.Adapter, serverURL, selfIP string, stop <-chan struct{}) {
+func refreshPeers(dev *wg.Device, ad *tun.Adapter, serverURL, selfIP string, useRelay bool, stop <-chan struct{}) {
 	routed := map[string]bool{}
 	var lastSig string
 	var curPeers []wg.Peer
@@ -154,9 +179,15 @@ func refreshPeers(dev *wg.Device, ad *tun.Adapter, serverURL, selfIP string, sto
 				log.Printf("peer %s: bad public key: %v", p.AssignedIP, err)
 				continue
 			}
+			// In relay mode the WireGuard endpoint is the peer's overlay IP
+			// (the relay routes by it); in direct mode it is the peer's UDP endpoint.
+			endpoint := p.Endpoint
+			if useRelay {
+				endpoint = p.AssignedIP
+			}
 			wgPeers = append(wgPeers, wg.Peer{
 				PublicKeyHex: hexKey,
-				Endpoint:     p.Endpoint,
+				Endpoint:     endpoint,
 				AllowedIP:    p.AssignedIP + "/32",
 			})
 			if !routed[p.AssignedIP] {

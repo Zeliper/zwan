@@ -24,14 +24,16 @@ import (
 
 // Server wires a single network's store and allocator behind the HTTP API.
 type Server struct {
-	net   *store.Network
-	ipam  *ipam.Allocator
-	token string
+	net       *store.Network
+	ipam      *ipam.Allocator
+	token     string
+	relayAddr string // host:port of the server relay advertised to clients
 }
 
-// New builds an API server for one network.
-func New(net *store.Network, alloc *ipam.Allocator, token string) *Server {
-	return &Server{net: net, ipam: alloc, token: token}
+// New builds an API server for one network. relayAddr is the public host:port of
+// the server relay (may be empty to disable relay advertisement).
+func New(net *store.Network, alloc *ipam.Allocator, token, relayAddr string) *Server {
+	return &Server{net: net, ipam: alloc, token: token, relayAddr: relayAddr}
 }
 
 // Routes returns the HTTP handler.
@@ -88,6 +90,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		DNSSuffix:   s.net.DNSSuffix,
 		OverlayCIDR: s.net.OverlayCIDR,
 		AssignedIP:  ip.String(),
+		RelayAddr:   s.relayAddr,
 	})
 }
 

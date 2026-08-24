@@ -17,6 +17,7 @@ type RegisterResponse struct {
 	DNSSuffix   string `json:"dns_suffix"`
 	OverlayCIDR string `json:"overlay_cidr"`
 	AssignedIP  string `json:"assigned_ip"`
+	RelayAddr   string `json:"relay_addr,omitempty"` // host:port of the server relay (M1b-3)
 }
 
 // Peer describes another member of the same network.

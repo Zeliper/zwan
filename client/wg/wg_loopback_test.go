@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/Zeliper/zwan/client/tun"
+	"github.com/Zeliper/zwan/client/wgbind"
 	"github.com/Zeliper/zwan/shared/keys"
 	"golang.zx2c4.com/wireguard/tun/tuntest"
 )
@@ -28,12 +29,12 @@ func TestHandshakeLoopback(t *testing.T) {
 	adA := &tun.Adapter{Name: "A", Dev: tunA.TUN()}
 	adB := &tun.Adapter{Name: "B", Dev: tunB.TUN()}
 
-	devA, err := Up(adA, privA, 51820)
+	devA, err := Up(adA, privA, 51820, wgbind.New())
 	if err != nil {
 		t.Fatalf("device A up: %v", err)
 	}
 	defer devA.Close()
-	devB, err := Up(adB, privB, 51821)
+	devB, err := Up(adB, privB, 51821, wgbind.New())
 	if err != nil {
 		t.Fatalf("device B up: %v", err)
 	}

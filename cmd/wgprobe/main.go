@@ -1,7 +1,10 @@
 // Command wgprobe is a diagnostic: one wireguard-go device on an in-memory
-// channel TUN (no admin / Wintun), talking to another wgprobe over loopback UDP.
-// Run two processes (--id a and --id b) to reproduce the two-process handshake
-// path without needing Administrator. Set ZWAN_WG_LOG=verbose for WG internals.
+// channel TUN (no admin / Wintun), talking to another wgprobe.
+//
+// Direct mode (default): the two probes send WireGuard straight to each other
+// over loopback UDP. Relay mode (--relay host:port): they tunnel through the
+// server relay, exactly as the agent's --relay path does. Either way, run two
+// processes (--id a and --id b). Set ZWAN_WG_LOG=verbose for WG internals.
 package main
 
 import (
@@ -10,11 +13,14 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/netip"
 	"time"
 
 	"github.com/Zeliper/zwan/client/tun"
 	"github.com/Zeliper/zwan/client/wg"
+	"github.com/Zeliper/zwan/client/wgbind"
 	"github.com/Zeliper/zwan/shared/keys"
+	"golang.zx2c4.com/wireguard/conn"
 	"golang.zx2c4.com/wireguard/tun/tuntest"
 )
 
@@ -29,27 +35,40 @@ func mustPriv(seed byte) keys.Private {
 
 func main() {
 	id := flag.String("id", "a", "a or b")
+	relayAddr := flag.String("relay", "", "relay host:port (empty = direct loopback)")
 	flag.Parse()
 
 	privA, privB := mustPriv(1), mustPriv(2)
 
 	var priv keys.Private
-	var peerPubHex, allowed string
+	var peerPubHex, selfIP, peerIP string
 	var listen, peer int
 	switch *id {
 	case "a":
 		priv, peerPubHex = privA, privB.Public().Hex()
-		listen, peer, allowed = 51830, 51831, "100.64.0.2/32"
+		selfIP, peerIP, listen, peer = "100.64.0.1", "100.64.0.2", 51830, 51831
 	case "b":
 		priv, peerPubHex = privB, privA.Public().Hex()
-		listen, peer, allowed = 51831, 51830, "100.64.0.1/32"
+		selfIP, peerIP, listen, peer = "100.64.0.2", "100.64.0.1", 51831, 51830
 	default:
 		log.Fatal("--id must be a or b")
 	}
 
+	var bind conn.Bind
+	var endpoint string
+	if *relayAddr != "" {
+		b, err := wgbind.NewRelay(*relayAddr, netip.MustParseAddr(selfIP))
+		if err != nil {
+			log.Fatalf("relay bind: %v", err)
+		}
+		bind, endpoint = b, peerIP // relay routes by overlay IP
+	} else {
+		bind, endpoint = wgbind.New(), fmt.Sprintf("127.0.0.1:%d", peer)
+	}
+
 	ch := tuntest.NewChannelTUN()
 	ad := &tun.Adapter{Name: "probe-" + *id, Dev: ch.TUN()}
-	dev, err := wg.Up(ad, priv, listen)
+	dev, err := wg.Up(ad, priv, listen, bind)
 	if err != nil {
 		log.Fatalf("wg up: %v", err)
 	}
@@ -57,12 +76,12 @@ func main() {
 
 	if err := dev.SetPeers([]wg.Peer{{
 		PublicKeyHex: peerPubHex,
-		Endpoint:     fmt.Sprintf("127.0.0.1:%d", peer),
-		AllowedIP:    allowed,
+		Endpoint:     endpoint,
+		AllowedIP:    peerIP + "/32",
 	}}); err != nil {
 		log.Fatalf("set peers: %v", err)
 	}
-	log.Printf("[%s] up: listen=%d peer=127.0.0.1:%d", *id, listen, peer)
+	log.Printf("[%s] up: self=%s peer=%s endpoint=%s relay=%q", *id, selfIP, peerIP, endpoint, *relayAddr)
 
 	for i := 0; i < 20; i++ {
 		hs, _ := dev.PeerHandshakes()

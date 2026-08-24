@@ -12,8 +12,8 @@ import (
 	"strings"
 
 	"github.com/Zeliper/zwan/client/tun"
-	"github.com/Zeliper/zwan/client/wgbind"
 	"github.com/Zeliper/zwan/shared/keys"
+	"golang.zx2c4.com/wireguard/conn"
 	"golang.zx2c4.com/wireguard/device"
 )
 
@@ -30,14 +30,14 @@ type Device struct {
 }
 
 // Up starts a wireguard-go device on the adapter with the given private key and
-// UDP listen port, using the default (direct UDP) bind.
-func Up(adapter *tun.Adapter, priv keys.Private, listenPort int) (*Device, error) {
+// UDP listen port, over the provided bind (direct or relay).
+func Up(adapter *tun.Adapter, priv keys.Private, listenPort int, bind conn.Bind) (*Device, error) {
 	level := device.LogLevelError
 	if os.Getenv("ZWAN_WG_LOG") == "verbose" {
 		level = device.LogLevelVerbose
 	}
 	logger := device.NewLogger(level, fmt.Sprintf("(%s) ", adapter.Name))
-	dev := device.NewDevice(adapter.Dev, wgbind.New(), logger)
+	dev := device.NewDevice(adapter.Dev, bind, logger)
 
 	cfg := fmt.Sprintf("private_key=%s\nlisten_port=%d\n", priv.Hex(), listenPort)
 	if err := dev.IpcSet(cfg); err != nil {
