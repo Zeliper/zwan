@@ -15,6 +15,8 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/Zeliper/zwan/client/join"
@@ -125,8 +127,14 @@ func runTunnel(res *join.Result, serverURL, adapterName string, wgPort int) {
 
 // refreshPeers polls the control server and reprograms the tunnel + routes as
 // peers appear or change.
+//
+// The WireGuard peer set is only re-applied when it actually changes: re-sending
+// replace_peers on every tick would reset in-flight handshakes (which take a few
+// seconds) and they would never complete.
 func refreshPeers(dev *wg.Device, ad *tun.Adapter, serverURL, selfIP string, stop <-chan struct{}) {
 	routed := map[string]bool{}
+	var lastSig string
+	var curPeers []wg.Peer
 	tick := time.NewTicker(3 * time.Second)
 	defer tick.Stop()
 
@@ -160,11 +168,16 @@ func refreshPeers(dev *wg.Device, ad *tun.Adapter, serverURL, selfIP string, sto
 				}
 			}
 		}
-		if err := dev.SetPeers(wgPeers); err != nil {
-			log.Printf("set peers: %v", err)
-			return
+		if sig := peerSig(wgPeers); sig != lastSig {
+			if err := dev.SetPeers(wgPeers); err != nil {
+				log.Printf("set peers: %v", err)
+				return
+			}
+			lastSig = sig
+			curPeers = wgPeers
+			log.Printf("applied %d peer(s)", len(wgPeers))
 		}
-		logHandshakes(dev, wgPeers)
+		logHandshakes(dev, curPeers)
 	}
 
 	apply()
@@ -176,6 +189,17 @@ func refreshPeers(dev *wg.Device, ad *tun.Adapter, serverURL, selfIP string, sto
 			apply()
 		}
 	}
+}
+
+// peerSig is a stable signature of a peer set, used to avoid re-applying an
+// unchanged configuration (which would reset in-flight handshakes).
+func peerSig(peers []wg.Peer) string {
+	parts := make([]string, 0, len(peers))
+	for _, p := range peers {
+		parts = append(parts, p.PublicKeyHex+"|"+p.Endpoint+"|"+p.AllowedIP)
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ",")
 }
 
 // logHandshakes reports each peer's WireGuard handshake state. A non-zero
