@@ -14,6 +14,7 @@ import (
 	"github.com/Zeliper/zwan/client/engine"
 	"github.com/Zeliper/zwan/client/ipc"
 	"github.com/Zeliper/zwan/client/profile"
+	"github.com/Zeliper/zwan/client/tun"
 	"github.com/Zeliper/zwan/shared"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
@@ -105,6 +106,13 @@ func main() {
 		if err := ipc.Serve(h); err != nil {
 			log.Fatal(err)
 		}
+	case "driver-install": // installs the Wintun driver by briefly creating an adapter
+		ad, err := tun.Create("zwan-driversetup", tun.DefaultMTU)
+		if err != nil {
+			log.Fatalf("driver install (run as Administrator; wintun.dll present?): %v", err)
+		}
+		_ = ad.Close()
+		log.Println("wintun driver installed")
 	default:
 		fmt.Println("unknown command:", os.Args[1])
 	}

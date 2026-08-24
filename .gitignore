@@ -36,3 +36,7 @@ Thumbs.db
 # OMC / local agent state
 .omc/
 .claude/
+
+# Release build artifacts
+dist/
+installer/stage/
