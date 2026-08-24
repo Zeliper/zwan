@@ -80,6 +80,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		Hostname:   req.Hostname,
 		PublicKey:  req.PublicKey,
 		AssignedIP: ip.String(),
+		Endpoint:   req.Endpoint,
 		JoinedAt:   time.Now(),
 	})
 	writeJSON(w, http.StatusOK, proto.RegisterResponse{
@@ -99,6 +100,7 @@ func (s *Server) peers(w http.ResponseWriter, r *http.Request) {
 			Hostname:   m.Hostname,
 			PublicKey:  m.PublicKey,
 			AssignedIP: m.AssignedIP,
+			Endpoint:   m.Endpoint,
 		})
 	}
 	writeJSON(w, http.StatusOK, resp)

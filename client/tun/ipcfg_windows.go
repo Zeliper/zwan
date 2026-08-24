@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -29,4 +30,18 @@ func setIPv4(name, ip string, prefix int) error {
 		time.Sleep(500 * time.Millisecond)
 	}
 	return last
+}
+
+// addRoute adds a /32 route for peerIP via the named adapter (on-link).
+func addRoute(name, peerIP string) error {
+	out, err := exec.Command("netsh", "interface", "ipv4", "add", "route",
+		"prefix="+peerIP+"/32", "interface="+name, "store=active").CombinedOutput()
+	if err != nil {
+		// A duplicate route is not an error for our purposes.
+		if strings.Contains(string(out), "already exists") || strings.Contains(string(out), "이미 있") {
+			return nil
+		}
+		return fmt.Errorf("netsh add route %s/32 dev %s: %v: %s", peerIP, name, err, string(out))
+	}
+	return nil
 }

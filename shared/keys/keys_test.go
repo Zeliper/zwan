@@ -42,3 +42,23 @@ func TestParseInvalid(t *testing.T) {
 		t.Fatal("expected error for invalid base64")
 	}
 }
+
+func TestHexLengthAndConversion(t *testing.T) {
+	p, err := Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Hex()) != 64 {
+		t.Fatalf("private hex length = %d, want 64", len(p.Hex()))
+	}
+	if len(p.Public().Hex()) != 64 {
+		t.Fatalf("public hex length = %d, want 64", len(p.Public().Hex()))
+	}
+	h, err := PublicHexFromBase64(p.Public().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h != p.Public().Hex() {
+		t.Fatalf("PublicHexFromBase64 = %s, want %s", h, p.Public().Hex())
+	}
+}

@@ -1,8 +1,5 @@
-// Package join implements the agent-side control-plane join flow.
-//
-// M1a: generate a node key, register with the control server, and fetch peers.
-// No tunnel is established yet — the Wintun adapter and wireguard-go data plane
-// arrive in M1b.
+// Package join implements the agent-side control-plane flow: register a node
+// key with the control server and fetch the peer list.
 package join
 
 import (
@@ -17,16 +14,19 @@ import (
 	"github.com/Zeliper/zwan/shared/proto"
 )
 
-// Result is the outcome of a successful join.
+// Result is the outcome of a successful join. Private is kept so the caller can
+// bring up a wireguard-go device with the same key it registered.
 type Result struct {
 	Register  proto.RegisterResponse
 	Peers     []proto.Peer
+	Private   keys.Private
 	PublicKey string
 }
 
-// Do registers this device with the control server at serverURL and returns the
-// assigned identity plus the current peer list.
-func Do(serverURL, token, deviceUUID, hostname string) (*Result, error) {
+// Do registers this device with the control server and returns the assigned
+// identity plus the current peer list. endpoint is the host:port that peers can
+// send WireGuard traffic to (may be empty for a control-plane-only join).
+func Do(serverURL, token, deviceUUID, hostname, endpoint string) (*Result, error) {
 	priv, err := keys.Generate()
 	if err != nil {
 		return nil, fmt.Errorf("generate node key: %w", err)
@@ -38,6 +38,7 @@ func Do(serverURL, token, deviceUUID, hostname string) (*Result, error) {
 		DeviceUUID: deviceUUID,
 		Hostname:   hostname,
 		PublicKey:  pub,
+		Endpoint:   endpoint,
 	})
 	client := &http.Client{Timeout: 10 * time.Second}
 
@@ -45,11 +46,21 @@ func Do(serverURL, token, deviceUUID, hostname string) (*Result, error) {
 	if err := postJSON(client, serverURL+"/v1/register", reqBody, &reg); err != nil {
 		return nil, fmt.Errorf("register: %w", err)
 	}
-	var peers proto.PeersResponse
-	if err := getJSON(client, serverURL+"/v1/peers", &peers); err != nil {
+	peers, err := FetchPeers(serverURL)
+	if err != nil {
 		return nil, fmt.Errorf("fetch peers: %w", err)
 	}
-	return &Result{Register: reg, Peers: peers.Peers, PublicKey: pub}, nil
+	return &Result{Register: reg, Peers: peers, Private: priv, PublicKey: pub}, nil
+}
+
+// FetchPeers returns the current members of the network.
+func FetchPeers(serverURL string) ([]proto.Peer, error) {
+	client := &http.Client{Timeout: 10 * time.Second}
+	var peers proto.PeersResponse
+	if err := getJSON(client, serverURL+"/v1/peers", &peers); err != nil {
+		return nil, err
+	}
+	return peers.Peers, nil
 }
 
 func postJSON(c *http.Client, url string, body []byte, out any) error {

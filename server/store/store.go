@@ -15,6 +15,7 @@ type Member struct {
 	Hostname   string
 	PublicKey  string
 	AssignedIP string
+	Endpoint   string
 	JoinedAt   time.Time
 }
 

@@ -34,7 +34,7 @@ $agent = Start-Process -PassThru -WindowStyle Hidden `
     -RedirectStandardOutput $agentOut -RedirectStandardError $agentErr `
     (Join-Path $bin 'zwan-agent.exe') `
     -ArgumentList '--tun','--token','demo-token-123','--device','pc-alpha','--name','alpha'
-Start-Sleep -Seconds 4
+Start-Sleep -Seconds 6
 
 W "`n-- agent output --"
 Get-Content $agentOut, $agentErr -ErrorAction SilentlyContinue | ForEach-Object { W $_ }

@@ -7,7 +7,6 @@ package tun
 
 import (
 	"fmt"
-	"net/netip"
 
 	wgtun "golang.zx2c4.com/wireguard/tun"
 )
@@ -36,14 +35,19 @@ func Create(name string, mtu int) (*Adapter, error) {
 	return &Adapter{Name: name, Dev: dev}, nil
 }
 
-// SetOverlayIP assigns a single overlay address to the adapter, taking the
-// prefix length from the network's CIDR (e.g. ip=100.64.0.1, cidr=100.64.0.0/16).
-func (a *Adapter) SetOverlayIP(ip, cidr string) error {
-	p, err := netip.ParsePrefix(cidr)
-	if err != nil {
-		return fmt.Errorf("parse cidr %q: %w", cidr, err)
-	}
-	return setIPv4(a.Name, ip, p.Bits())
+// SetNodeIP assigns the node's overlay address to the adapter as a /32.
+//
+// A /32 (host route) is used deliberately: the overlay CIDR is not put on-link,
+// so per-peer /32 routes (AddPeerRoute) drive which destinations enter the
+// tunnel. This also lets multiple adapters in the same overlay CIDR coexist on
+// one host (needed for local two-client tests and multi-network clients).
+func (a *Adapter) SetNodeIP(ip string) error {
+	return setIPv4(a.Name, ip, 32)
+}
+
+// AddPeerRoute adds a /32 route for a peer's overlay address via this adapter.
+func (a *Adapter) AddPeerRoute(peerIP string) error {
+	return addRoute(a.Name, peerIP)
 }
 
 // Close removes the adapter.

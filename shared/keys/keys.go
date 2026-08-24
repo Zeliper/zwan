@@ -8,6 +8,7 @@ import (
 	"crypto/ecdh"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 )
 
 // Private is an X25519 private (node) key.
@@ -33,6 +34,22 @@ func (p Private) String() string { return base64.StdEncoding.EncodeToString(p.k.
 
 // String encodes the public key as standard base64.
 func (p Public) String() string { return base64.StdEncoding.EncodeToString(p.k.Bytes()) }
+
+// Hex encodes the private key as hex (the format wireguard-go's UAPI expects).
+func (p Private) Hex() string { return hex.EncodeToString(p.k.Bytes()) }
+
+// Hex encodes the public key as hex (the format wireguard-go's UAPI expects).
+func (p Public) Hex() string { return hex.EncodeToString(p.k.Bytes()) }
+
+// PublicHexFromBase64 converts a base64 public key (as stored/registered) to the
+// hex form used in wireguard-go peer configuration.
+func PublicHexFromBase64(b64 string) (string, error) {
+	pub, err := ParsePublic(b64)
+	if err != nil {
+		return "", err
+	}
+	return pub.Hex(), nil
+}
 
 // ParsePrivate decodes a base64 private key.
 func ParsePrivate(s string) (Private, error) {

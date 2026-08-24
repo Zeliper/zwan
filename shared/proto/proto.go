@@ -7,7 +7,8 @@ type RegisterRequest struct {
 	Token      string `json:"token"`
 	DeviceUUID string `json:"device_uuid"`
 	Hostname   string `json:"hostname"`
-	PublicKey  string `json:"public_key"` // base64 X25519 node public key
+	PublicKey  string `json:"public_key"`         // base64 X25519 node public key
+	Endpoint   string `json:"endpoint,omitempty"` // host:port peers can send WireGuard UDP to (M1b-2)
 }
 
 // RegisterResponse is returned on a successful join.
@@ -23,6 +24,7 @@ type Peer struct {
 	Hostname   string `json:"hostname"`
 	PublicKey  string `json:"public_key"`
 	AssignedIP string `json:"assigned_ip"`
+	Endpoint   string `json:"endpoint,omitempty"` // host:port for WireGuard (M1b-2)
 }
 
 // PeersResponse lists the members of a network.
