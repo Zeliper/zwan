@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/Zeliper/zwan/client/join"
+	"github.com/Zeliper/zwan/client/l4"
 	"github.com/Zeliper/zwan/client/resolver"
 	"github.com/Zeliper/zwan/client/tun"
 	"github.com/Zeliper/zwan/client/wg"
@@ -46,6 +47,7 @@ func main() {
 	publishName := flag.String("publish-name", "", "publish a service of this name hosted on this node")
 	publishPort := flag.Int("publish-port", 0, "published service port (over the overlay)")
 	publishProto := flag.String("publish-proto", "tcp", "published service protocol (tcp/udp)")
+	publishBackend := flag.Int("publish-backend-port", 0, "localhost backend port; enables the L4 proxy (0 = service binds the overlay itself)")
 	flag.Parse()
 
 	log.Printf("%s (%s) %s", shared.ProductName, shared.ComponentAgent, shared.Version)
@@ -74,11 +76,12 @@ func main() {
 		if *publishPort == 0 {
 			log.Fatal("--publish-port is required with --publish-name")
 		}
-		svc := proto.Service{Name: *publishName, Proto: *publishProto, Port: *publishPort, NodeIP: res.Register.AssignedIP}
+		svc := proto.Service{Name: *publishName, Proto: *publishProto, Port: *publishPort, BackendPort: *publishBackend, NodeIP: res.Register.AssignedIP}
 		if err := join.PublishService(*server, *token, svc); err != nil {
 			log.Fatalf("publish service: %v", err)
 		}
-		log.Printf("published service %s.%s -> %s:%d/%s", svc.Name, res.Register.DNSSuffix, svc.NodeIP, svc.Port, svc.Proto)
+		log.Printf("published service %s.%s -> %s:%d/%s (backend 127.0.0.1:%d)",
+			svc.Name, res.Register.DNSSuffix, svc.NodeIP, svc.Port, svc.Proto, svc.BackendPort)
 	}
 
 	adapterName := *adapter
@@ -189,6 +192,7 @@ func runTunnel(res *join.Result, serverURL, adapterName string, wgPort int, useR
 // seconds) and they would never complete.
 func refreshPeers(dev *wg.Device, ad *tun.Adapter, rslv *resolver.Resolver, serverURL, suffix, selfIP string, useRelay bool, stop <-chan struct{}) {
 	routed := map[string]bool{}
+	hostProxies := map[string]*l4.TCPProxy{}
 	var lastSig string
 	var curPeers []wg.Peer
 	tick := time.NewTicker(3 * time.Second)
@@ -240,7 +244,13 @@ func refreshPeers(dev *wg.Device, ad *tun.Adapter, rslv *resolver.Resolver, serv
 			log.Printf("applied %d peer(s)", len(wgPeers))
 		}
 		logHandshakes(dev, curPeers)
-		updateDNS(rslv, suffix, serverURL, peers)
+
+		svcs, serr := join.FetchServices(serverURL)
+		if serr != nil {
+			log.Printf("service refresh: %v", serr)
+		}
+		updateDNS(rslv, suffix, peers, svcs)
+		manageHostProxies(hostProxies, selfIP, svcs)
 	}
 
 	apply()
@@ -266,8 +276,8 @@ func peerSig(peers []wg.Peer) string {
 }
 
 // updateDNS refreshes the local resolver's records from peers (node hostnames)
-// and the service registry, all under the network's DNS suffix.
-func updateDNS(rslv *resolver.Resolver, suffix, serverURL string, peers []proto.Peer) {
+// and services, all under the network's DNS suffix.
+func updateDNS(rslv *resolver.Resolver, suffix string, peers []proto.Peer, svcs []proto.Service) {
 	if rslv == nil {
 		return
 	}
@@ -280,16 +290,38 @@ func updateDNS(rslv *resolver.Resolver, suffix, serverURL string, peers []proto.
 			recs[strings.ToLower(p.Hostname)+"."+suffix] = ip
 		}
 	}
-	if svcs, err := join.FetchServices(serverURL); err == nil {
-		for _, s := range svcs {
-			if ip := net.ParseIP(s.NodeIP); ip != nil {
-				recs[strings.ToLower(s.Name)+"."+suffix] = ip
-			}
+	for _, s := range svcs {
+		if ip := net.ParseIP(s.NodeIP); ip != nil {
+			recs[strings.ToLower(s.Name)+"."+suffix] = ip
 		}
-	} else {
-		log.Printf("service refresh: %v", err)
 	}
 	rslv.SetRecords(recs)
+}
+
+// manageHostProxies starts an L4 proxy for each service hosted on this node that
+// has a localhost backend, so the real backend stays bound to 127.0.0.1 while the
+// service is reachable at <selfOverlayIP>:<port> over the overlay.
+func manageHostProxies(running map[string]*l4.TCPProxy, selfIP string, svcs []proto.Service) {
+	for _, s := range svcs {
+		if s.NodeIP != selfIP || s.BackendPort == 0 {
+			continue
+		}
+		if strings.ToLower(s.Proto) != "tcp" {
+			continue // UDP proxy not implemented yet
+		}
+		if _, ok := running[s.Name]; ok {
+			continue
+		}
+		listen := fmt.Sprintf("%s:%d", selfIP, s.Port)
+		backend := fmt.Sprintf("127.0.0.1:%d", s.BackendPort)
+		p, err := l4.ListenTCP(listen, backend)
+		if err != nil {
+			log.Printf("service %s proxy on %s: %v", s.Name, listen, err)
+			continue
+		}
+		running[s.Name] = p
+		log.Printf("serving %s on %s -> %s", s.Name, listen, backend)
+	}
 }
 
 // logHandshakes reports each peer's WireGuard handshake state. A non-zero

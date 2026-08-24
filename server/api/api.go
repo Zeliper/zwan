@@ -118,7 +118,7 @@ func (s *Server) services(w http.ResponseWriter, r *http.Request) {
 		resp := proto.ServicesResponse{Services: make([]proto.Service, 0, len(svcs))}
 		for _, sv := range svcs {
 			resp.Services = append(resp.Services, proto.Service{
-				Name: sv.Name, Proto: sv.Proto, Port: sv.Port, NodeIP: sv.NodeIP,
+				Name: sv.Name, Proto: sv.Proto, Port: sv.Port, BackendPort: sv.BackendPort, NodeIP: sv.NodeIP,
 			})
 		}
 		sort.Slice(resp.Services, func(i, j int) bool { return resp.Services[i].Name < resp.Services[j].Name })
@@ -142,8 +142,8 @@ func (s *Server) services(w http.ResponseWriter, r *http.Request) {
 		if protocol == "" {
 			protocol = "tcp"
 		}
-		s.net.UpsertService(&store.Service{Name: req.Name, Proto: protocol, Port: req.Port, NodeIP: req.NodeIP})
-		writeJSON(w, http.StatusOK, proto.Service{Name: req.Name, Proto: protocol, Port: req.Port, NodeIP: req.NodeIP})
+		s.net.UpsertService(&store.Service{Name: req.Name, Proto: protocol, Port: req.Port, BackendPort: req.BackendPort, NodeIP: req.NodeIP})
+		writeJSON(w, http.StatusOK, proto.Service{Name: req.Name, Proto: protocol, Port: req.Port, BackendPort: req.BackendPort, NodeIP: req.NodeIP})
 
 	default:
 		writeErr(w, http.StatusMethodNotAllowed, "GET or POST only")

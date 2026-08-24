@@ -37,10 +37,11 @@ type PeersResponse struct {
 // overlay. Name is the label under the network's DNS suffix (e.g. "minecraft"
 // resolves as minecraft.<suffix>).
 type Service struct {
-	Name   string `json:"name"`
-	Proto  string `json:"proto"` // "tcp" or "udp"
-	Port   int    `json:"port"`  // port the service listens on (over the overlay)
-	NodeIP string `json:"node_ip"`
+	Name        string `json:"name"`
+	Proto       string `json:"proto"`                  // "tcp" or "udp"
+	Port        int    `json:"port"`                   // port reachable over the overlay (e.g. 25565)
+	BackendPort int    `json:"backend_port,omitempty"` // localhost-only backend port on the host (0 = none)
+	NodeIP      string `json:"node_ip"`
 }
 
 // RegisterServiceRequest publishes (or updates) a service.

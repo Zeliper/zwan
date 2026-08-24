@@ -21,10 +21,11 @@ type Member struct {
 
 // Service is a named service reachable at NodeIP:Port over the overlay.
 type Service struct {
-	Name   string
-	Proto  string
-	Port   int
-	NodeIP string
+	Name        string
+	Proto       string
+	Port        int
+	BackendPort int
+	NodeIP      string
 }
 
 // Network is one overlay network with its members and services.
