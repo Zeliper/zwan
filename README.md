@@ -16,6 +16,13 @@ Tailscale/ZeroTier 계열이되, **중앙 의존 없이 각자 셀프호스팅**
 - **zwan-agent** — Windows 클라이언트 (가상 NIC, 암호화 터널, Split DNS, L4 서비스 라우팅, 다중 네트워크).
 - **frontend** — Wails v2 기반 GUI (React + shadcn/ui, 시스템 다크/라이트 테마).
 
+## 설치 (Releases)
+[Releases](https://github.com/Zeliper/zwan/releases)에서 받는다.
+- **Windows 클라이언트**: `zwan-setup.exe` — 트레이 앱 + SYSTEM 엔진 서비스 + Wintun 가상 WAN 드라이버를 설치하고 로그인 시 시작. 이후 자동 업데이트.
+- **서버(자가호스팅)**: `zwan-server-windows-amd64.exe` / `zwan-server-linux-amd64` — 공인 IP 머신(VPS)용 헤드리스 컨트롤 서버 + 릴레이.
+
+아키텍처: 엔진 = SYSTEM 서비스(`cmd/zwan-service`), 트레이/GUI = 사용자 권한, 둘 사이는 named-pipe IPC.
+
 ## 문서
 - 설계: [`MyWAN_가상네트워크_아이디어_정리.md`](./MyWAN_가상네트워크_아이디어_정리.md)
 - 구현 계획: [`구현계획.md`](./구현계획.md)
