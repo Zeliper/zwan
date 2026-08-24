@@ -1,37 +1,39 @@
-import { useEffect, useRef, useState } from 'react'
-import { Loader2, Network, RefreshCw, Server, Share2, LogOut, Radio } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { AlertTriangle, Loader2, Network, Power, Radio, Server, Share2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { ThemeToggle } from '@/components/theme-toggle'
-import { Join, Refresh } from '../wailsjs/go/main/App'
+import { Connect, Disconnect, ServiceUp, Status } from '../wailsjs/go/main/App'
 
 interface Peer {
   hostname: string
-  publicKey: string
-  assignedIp: string
+  public_key: string
+  assigned_ip: string
   endpoint: string
 }
 interface Service {
   name: string
   proto: string
   port: number
-  backendPort: number
-  nodeIp: string
-  fqdn: string
+  backend_port: number
+  node_ip: string
 }
-interface JoinResult {
+interface EngineStatus {
+  connected: boolean
   networkId: string
   dnsSuffix: string
   overlayCidr: string
   assignedIp: string
   relayAddr: string
   publicKey: string
-  deviceUuid: string
+  via: string
   peers: Peer[]
   services: Service[]
+  handshakes: Record<string, boolean>
+  lastError: string
 }
 
 function Row({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
@@ -47,17 +49,42 @@ export default function App() {
   const [server, setServer] = useState('http://127.0.0.1:8787')
   const [token, setToken] = useState('')
   const [name, setName] = useState('')
-  const [state, setState] = useState<JoinResult | null>(null)
+  const [useRelay, setUseRelay] = useState(true)
+  const [status, setStatus] = useState<EngineStatus | null>(null)
+  const [serviceUp, setServiceUp] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const timer = useRef<number | null>(null)
+  const poll = useRef<number | null>(null)
+
+  const refresh = useCallback(async () => {
+    try {
+      const up = await ServiceUp()
+      setServiceUp(up)
+      if (!up) {
+        setStatus(null)
+        return
+      }
+      const s = (await Status()) as unknown as EngineStatus
+      setStatus(s?.connected ? s : null)
+    } catch {
+      setServiceUp(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    refresh()
+    poll.current = window.setInterval(refresh, 3000)
+    return () => {
+      if (poll.current) window.clearInterval(poll.current)
+    }
+  }, [refresh])
 
   async function connect() {
     setBusy(true)
     setError('')
     try {
-      const r = (await Join(server, token, name)) as unknown as JoinResult
-      setState(r)
+      const s = (await Connect(server, token, name, useRelay)) as unknown as EngineStatus
+      setStatus(s?.connected ? s : null)
     } catch (e: any) {
       setError(String(e?.message ?? e))
     } finally {
@@ -65,28 +92,19 @@ export default function App() {
     }
   }
 
-  async function refresh() {
+  async function disconnect() {
+    setBusy(true)
     try {
-      const r = (await Refresh()) as unknown as JoinResult
-      setState(r)
+      await Disconnect()
+      setStatus(null)
     } catch {
-      /* transient */
+      /* ignore */
+    } finally {
+      setBusy(false)
     }
   }
 
-  function leave() {
-    if (timer.current) window.clearInterval(timer.current)
-    setState(null)
-  }
-
-  useEffect(() => {
-    if (!state) return
-    timer.current = window.setInterval(refresh, 4000)
-    return () => {
-      if (timer.current) window.clearInterval(timer.current)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state !== null])
+  const connected = !!status?.connected
 
   return (
     <div className="min-h-full bg-background">
@@ -101,20 +119,32 @@ export default function App() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {state && (
+          {connected ? (
             <Badge variant="success" className="gap-1">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> joined
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> connected
             </Badge>
+          ) : (
+            <Badge variant="muted">disconnected</Badge>
           )}
           <ThemeToggle />
         </div>
       </header>
 
       <main className="mx-auto w-full max-w-3xl p-6">
-        {!state ? (
+        {!serviceUp && (
+          <div className="mb-4 flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <div>
+              Engine service is not running. Install it (the installer does this), or run
+              <span className="mx-1 font-mono">zwan-service install</span> as Administrator.
+            </div>
+          </div>
+        )}
+
+        {!connected ? (
           <Card className="mx-auto max-w-md">
             <CardHeader>
-              <CardTitle>Join a network</CardTitle>
+              <CardTitle>Connect to a network</CardTitle>
               <CardDescription>Enter the server address and your join token.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -130,10 +160,14 @@ export default function App() {
                 <Label htmlFor="name">Name (optional)</Label>
                 <Input id="name" value={name} onChange={(e) => setName(e.target.value)} placeholder="this device's label" />
               </div>
+              <label className="flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={useRelay} onChange={(e) => setUseRelay(e.target.checked)} className="h-4 w-4 accent-primary" />
+                Route via server relay (works behind NAT)
+              </label>
               {error && <p className="text-sm text-destructive">{error}</p>}
-              <Button className="w-full" onClick={connect} disabled={busy || !token}>
+              <Button className="w-full" onClick={connect} disabled={busy || !token || !serviceUp}>
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Radio className="h-4 w-4" />}
-                {busy ? 'Joining…' : 'Join'}
+                {busy ? 'Connecting…' : 'Connect'}
               </Button>
             </CardContent>
           </Card>
@@ -141,17 +175,14 @@ export default function App() {
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <div>
-                <h1 className="text-lg font-semibold">{state.networkId}</h1>
-                <p className="text-sm text-muted-foreground">*.{state.dnsSuffix}</p>
+                <h1 className="text-lg font-semibold">{status!.networkId}</h1>
+                <p className="text-sm text-muted-foreground">
+                  *.{status!.dnsSuffix} · via {status!.via}
+                </p>
               </div>
-              <div className="flex gap-2">
-                <Button variant="outline" size="sm" onClick={refresh}>
-                  <RefreshCw className="h-4 w-4" /> Refresh
-                </Button>
-                <Button variant="outline" size="sm" onClick={leave}>
-                  <LogOut className="h-4 w-4" /> Leave
-                </Button>
-              </div>
+              <Button variant="outline" size="sm" onClick={disconnect} disabled={busy}>
+                <Power className="h-4 w-4" /> Disconnect
+              </Button>
             </div>
 
             <Card>
@@ -161,25 +192,30 @@ export default function App() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <Row label="Overlay IP" value={state.assignedIp} mono />
-                <Row label="Overlay CIDR" value={state.overlayCidr} mono />
-                <Row label="Relay" value={state.relayAddr} mono />
-                <Row label="Public key" value={state.publicKey} mono />
+                <Row label="Overlay IP" value={status!.assignedIp} mono />
+                <Row label="Overlay CIDR" value={status!.overlayCidr} mono />
+                <Row label="Relay" value={status!.relayAddr} mono />
               </CardContent>
             </Card>
 
             <Card>
               <CardHeader className="pb-2">
                 <CardTitle className="flex items-center gap-2 text-base">
-                  <Network className="h-4 w-4" /> Peers <Badge variant="muted">{state.peers.length}</Badge>
+                  <Network className="h-4 w-4" /> Peers <Badge variant="muted">{status!.peers?.length ?? 0}</Badge>
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-1">
-                {state.peers.length === 0 && <p className="text-sm text-muted-foreground">No peers yet.</p>}
-                {state.peers.map((p) => (
-                  <div key={p.publicKey} className="flex items-center justify-between rounded-md px-2 py-1.5 text-sm hover:bg-accent">
-                    <span className="font-medium">{p.hostname || '(unnamed)'}</span>
-                    <span className="font-mono text-muted-foreground">{p.assignedIp}</span>
+                {(status!.peers?.length ?? 0) === 0 && <p className="text-sm text-muted-foreground">No peers yet.</p>}
+                {status!.peers?.map((p) => (
+                  <div key={p.public_key} className="flex items-center justify-between rounded-md px-2 py-1.5 text-sm hover:bg-accent">
+                    <span className="flex items-center gap-2 font-medium">
+                      <span
+                        className={`h-1.5 w-1.5 rounded-full ${status!.handshakes?.[p.assigned_ip] ? 'bg-emerald-500' : 'bg-muted-foreground/40'}`}
+                        title={status!.handshakes?.[p.assigned_ip] ? 'tunnel established' : 'connecting'}
+                      />
+                      {p.hostname || '(unnamed)'}
+                    </span>
+                    <span className="font-mono text-muted-foreground">{p.assigned_ip}</span>
                   </div>
                 ))}
               </CardContent>
@@ -188,16 +224,18 @@ export default function App() {
             <Card>
               <CardHeader className="pb-2">
                 <CardTitle className="flex items-center gap-2 text-base">
-                  <Share2 className="h-4 w-4" /> Services <Badge variant="muted">{state.services.length}</Badge>
+                  <Share2 className="h-4 w-4" /> Services <Badge variant="muted">{status!.services?.length ?? 0}</Badge>
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-1">
-                {state.services.length === 0 && <p className="text-sm text-muted-foreground">No services published.</p>}
-                {state.services.map((s) => (
+                {(status!.services?.length ?? 0) === 0 && <p className="text-sm text-muted-foreground">No services published.</p>}
+                {status!.services?.map((s) => (
                   <div key={s.name} className="flex items-center justify-between rounded-md px-2 py-1.5 text-sm hover:bg-accent">
-                    <span className="font-mono">{s.fqdn}</span>
+                    <span className="font-mono">
+                      {s.name}.{status!.dnsSuffix}
+                    </span>
                     <span className="font-mono text-muted-foreground">
-                      {s.nodeIp}:{s.port}/{s.proto}
+                      {s.node_ip}:{s.port}/{s.proto}
                     </span>
                   </div>
                 ))}

@@ -11,17 +11,22 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
+//go:embed build/windows/icon.ico
+var trayIcon []byte
+
 func main() {
-	// Create an instance of the app structure
 	app := NewApp()
 
-	// Create application with options
+	// System tray runs alongside the window; closing the window hides to tray.
+	go startTray(app, trayIcon)
+
 	err := wails.Run(&options.App{
-		Title:     "zwan",
-		Width:     1024,
-		Height:    720,
-		MinWidth:  720,
-		MinHeight: 560,
+		Title:             "zwan",
+		Width:             1024,
+		Height:            720,
+		MinWidth:          720,
+		MinHeight:         560,
+		HideWindowOnClose: true,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},

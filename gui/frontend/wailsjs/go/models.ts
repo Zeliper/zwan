@@ -1,71 +1,37 @@
-export namespace main {
+export namespace engine {
 	
-	export class ServiceInfo {
-	    name: string;
-	    proto: string;
-	    port: number;
-	    backendPort: number;
-	    nodeIp: string;
-	    fqdn: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new ServiceInfo(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.name = source["name"];
-	        this.proto = source["proto"];
-	        this.port = source["port"];
-	        this.backendPort = source["backendPort"];
-	        this.nodeIp = source["nodeIp"];
-	        this.fqdn = source["fqdn"];
-	    }
-	}
-	export class PeerInfo {
-	    hostname: string;
-	    publicKey: string;
-	    assignedIp: string;
-	    endpoint: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new PeerInfo(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.hostname = source["hostname"];
-	        this.publicKey = source["publicKey"];
-	        this.assignedIp = source["assignedIp"];
-	        this.endpoint = source["endpoint"];
-	    }
-	}
-	export class JoinResult {
+	export class Status {
+	    connected: boolean;
 	    networkId: string;
 	    dnsSuffix: string;
 	    overlayCidr: string;
 	    assignedIp: string;
 	    relayAddr: string;
 	    publicKey: string;
-	    deviceUuid: string;
-	    peers: PeerInfo[];
-	    services: ServiceInfo[];
+	    via: string;
+	    peers: proto.Peer[];
+	    services: proto.Service[];
+	    handshakes: Record<string, boolean>;
+	    lastError: string;
 	
 	    static createFrom(source: any = {}) {
-	        return new JoinResult(source);
+	        return new Status(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.connected = source["connected"];
 	        this.networkId = source["networkId"];
 	        this.dnsSuffix = source["dnsSuffix"];
 	        this.overlayCidr = source["overlayCidr"];
 	        this.assignedIp = source["assignedIp"];
 	        this.relayAddr = source["relayAddr"];
 	        this.publicKey = source["publicKey"];
-	        this.deviceUuid = source["deviceUuid"];
-	        this.peers = this.convertValues(source["peers"], PeerInfo);
-	        this.services = this.convertValues(source["services"], ServiceInfo);
+	        this.via = source["via"];
+	        this.peers = this.convertValues(source["peers"], proto.Peer);
+	        this.services = this.convertValues(source["services"], proto.Service);
+	        this.handshakes = source["handshakes"];
+	        this.lastError = source["lastError"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -86,7 +52,49 @@ export namespace main {
 		    return a;
 		}
 	}
+
+}
+
+export namespace proto {
 	
+	export class Peer {
+	    hostname: string;
+	    public_key: string;
+	    assigned_ip: string;
+	    endpoint?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Peer(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.hostname = source["hostname"];
+	        this.public_key = source["public_key"];
+	        this.assigned_ip = source["assigned_ip"];
+	        this.endpoint = source["endpoint"];
+	    }
+	}
+	export class Service {
+	    name: string;
+	    proto: string;
+	    port: number;
+	    backend_port?: number;
+	    node_ip: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Service(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.proto = source["proto"];
+	        this.port = source["port"];
+	        this.backend_port = source["backend_port"];
+	        this.node_ip = source["node_ip"];
+	    }
+	}
 
 }
 
