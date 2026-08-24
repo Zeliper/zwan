@@ -10,13 +10,31 @@ import (
 	"strings"
 )
 
-// DeviceUUID returns a stable per-user device identifier, creating and persisting
-// one on first use (under the OS user config directory).
+// DeviceUUID returns a stable per-user device identifier (under the OS user
+// config directory), creating and persisting one on first use.
 func DeviceUUID() (string, error) {
-	path, err := deviceIDPath()
+	dir, err := os.UserConfigDir()
 	if err != nil {
 		return "", err
 	}
+	return deviceUUIDAt(filepath.Join(dir, "zwan"))
+}
+
+// MachineDeviceUUID returns a machine-wide device identifier (under ProgramData),
+// used by the SYSTEM engine service so a machine keeps its overlay IP.
+func MachineDeviceUUID() (string, error) {
+	base := os.Getenv("ProgramData")
+	if base == "" {
+		base = `C:\ProgramData`
+	}
+	return deviceUUIDAt(filepath.Join(base, "zwan"))
+}
+
+func deviceUUIDAt(dir string) (string, error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, "device_id")
 	if b, err := os.ReadFile(path); err == nil {
 		if id := strings.TrimSpace(string(b)); len(id) >= 8 {
 			return id, nil
@@ -31,16 +49,4 @@ func DeviceUUID() (string, error) {
 		return "", err
 	}
 	return id, nil
-}
-
-func deviceIDPath() (string, error) {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		return "", err
-	}
-	d := filepath.Join(dir, "zwan")
-	if err := os.MkdirAll(d, 0o700); err != nil {
-		return "", err
-	}
-	return filepath.Join(d, "device_id"), nil
 }
