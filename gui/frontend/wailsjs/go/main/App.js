@@ -10,6 +10,22 @@ export function Disconnect() {
   return window['go']['main']['App']['Disconnect']();
 }
 
+export function HostGenToken() {
+  return window['go']['main']['App']['HostGenToken']();
+}
+
+export function HostStart(arg1, arg2, arg3, arg4, arg5, arg6) {
+  return window['go']['main']['App']['HostStart'](arg1, arg2, arg3, arg4, arg5, arg6);
+}
+
+export function HostStatus() {
+  return window['go']['main']['App']['HostStatus']();
+}
+
+export function HostStop() {
+  return window['go']['main']['App']['HostStop']();
+}
+
 export function ServiceUp() {
   return window['go']['main']['App']['ServiceUp']();
 }

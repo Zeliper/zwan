@@ -55,6 +55,57 @@ export namespace engine {
 
 }
 
+export namespace main {
+	
+	export class HostState {
+	    running: boolean;
+	    networkId: string;
+	    dnsSuffix: string;
+	    cidr: string;
+	    token: string;
+	    controlAddr: string;
+	    relayAddr: string;
+	    peers: proto.Peer[];
+	    services: proto.Service[];
+	
+	    static createFrom(source: any = {}) {
+	        return new HostState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.running = source["running"];
+	        this.networkId = source["networkId"];
+	        this.dnsSuffix = source["dnsSuffix"];
+	        this.cidr = source["cidr"];
+	        this.token = source["token"];
+	        this.controlAddr = source["controlAddr"];
+	        this.relayAddr = source["relayAddr"];
+	        this.peers = this.convertValues(source["peers"], proto.Peer);
+	        this.services = this.convertValues(source["services"], proto.Service);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
 export namespace proto {
 	
 	export class Peer {
