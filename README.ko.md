@@ -25,6 +25,7 @@ Tailscale/ZeroTier 계열이되, **컨트롤 플레인을 직접 운영**하고 
 
 - 🔐 **암호화 오버레이** — WireGuard 데이터플레인(userspace `wireguard-go` + Windows Wintun)
 - 🏠 **셀프호스팅** — 자체 컨트롤 서버 + 릴레이. 제3자 개입 없음
+- 🔏 **기본 TLS** — 도메인이 있으면 Let's Encrypt 인증서 자동 발급, 없으면 자체 서명 키 + 지문(pin) 검증
 - 🌐 **NAT 뒤에서도 동작** — 직접 경로가 없으면 공인 IP 서버의 릴레이로 터널링
 - 🧭 **이름 기반 접속** — Split-DNS 리졸버가 `서비스.<서픽스>` 를 올바른 노드로 해석
 - 🚪 **L4 서비스 라우터** — 서비스 게시 시 실제 백엔드는 `127.0.0.1`에만 바인딩(LAN/인터넷 미노출)
@@ -33,6 +34,10 @@ Tailscale/ZeroTier 계열이되, **컨트롤 플레인을 직접 운영**하고 
 - ⬆️ **자동 업데이트** — 클라이언트는 GitHub 릴리스로 자동 업데이트, 서버도 자가 업데이트(`--auto-update`)
 
 ## 동작 방식
+
+컨트롤 채널은 **TLS**다. 도메인이 있으면 ACME로 인증서를 자동 발급받고, 없으면 서버가 자체 서명 키를
+유지하면서 그 공개키 지문(pin)을 공개한다. 클라이언트는 CA 체인 대신 이 지문을 검증하므로 IP만 있는
+서버도 신원 확인이 된다.
 
 컨트롤 플레인(서버)은 멤버십·엔드포인트·서비스·DNS 정보만 교환한다. 데이터플레인은 P2P WireGuard이며,
 직접 도달이 안 되면 공인 IP를 가진 서버가 패킷을 릴레이한다. Windows에서는 터널을 **SYSTEM 서비스**
@@ -50,20 +55,39 @@ Tailscale/ZeroTier 계열이되, **컨트롤 플레인을 직접 운영**하고 
 ## 빠른 시작
 
 **1. 네트워크 호스팅**(공인 IP 머신):
+
+*도메인이 있으면* — ACME로 공인 인증서가 자동 발급된다:
 ```bash
 ./zwan-server-linux-amd64 \
   --token YOUR-SECRET-TOKEN \
   --network home --dns-suffix home.zwan \
-  --addr 0.0.0.0:8787 --relay-public 공인IP:3478 --auto-update
+  --addr 0.0.0.0:443 --domain vpn.example.com \
+  --relay-public vpn.example.com:3478 --auto-update
 ```
-방화벽에서 TCP `8787`(컨트롤), UDP `3478`(릴레이)을 연다.
 
-**2. 클라이언트 가입:** `zwan-setup.exe` 실행 → zwan 열기 → **Join** → 서버/토큰 입력.
-데스크톱에서 직접 호스팅하려면 **Host** 탭 사용(토큰 자동 생성).
+*도메인이 없으면* — 자체 서명 키를 유지하고, 클라이언트가 검증할 지문을 출력한다:
+```bash
+./zwan-server-linux-amd64 \
+  --token YOUR-SECRET-TOKEN \
+  --network home --dns-suffix home.zwan \
+  --addr 0.0.0.0:8787 --public-host 공인IP:8787 --relay-public 공인IP:3478
+```
+
+어느 쪽이든 나눠줄 주소를 지문까지 붙여 출력한다:
+```text
+clients join with: --server "https://공인IP:8787#sha256:NMuaxTGRTKlRnx..." --token <token>
+```
+
+방화벽에서 컨트롤 포트(TCP `443` 또는 `8787`)와 UDP `3478`(릴레이)을 연다. ACME를 443 이외의
+포트에서 쓰면 HTTP-01 챌린지용 TCP `80`도 열어야 한다.
+
+**2. 클라이언트 가입:** `zwan-setup.exe` 실행 → zwan 열기 → **Join** → 출력된 가입 주소를 **Server**
+칸에 그대로 붙여넣고(지문은 자동 분리됨) 토큰 입력. 데스크톱에서 직접 호스팅하려면 **Host** 탭 사용
+(TLS 모드 선택 + 토큰·가입 주소 자동 생성).
 
 **3. 서비스 게시**(백엔드는 localhost 유지):
 ```bash
-zwan-agent --server http://공인IP:8787 --token YOUR-SECRET-TOKEN \
+zwan-agent --server "https://공인IP:8787#sha256:NMuaxTGRTKlRnx..." --token YOUR-SECRET-TOKEN \
   --device my-nas --name nas --up --relay \
   --publish-name minecraft --publish-port 25565 --publish-backend-port 31001
 ```
@@ -80,9 +104,10 @@ scripts/build-release.sh 0.1.1     # 전체 릴리스 산출물 -> dist/
 
 ## 상태 & 로드맵
 
-동작: 컨트롤 플레인, 암호 터널(직접+릴레이), Split-DNS+서비스 레지스트리, L4 라우터, 데스크톱 앱
-(트레이+서비스+IPC), Windows 설치파일, 자동 업데이트. 남음: 컨트롤 API TLS/ACME(현재 평문 HTTP),
-ACL, 클라이언트-로컬 VIP·UDP 프록시, IPv6 전송, 코드 서명.
+동작: 컨트롤 플레인 TLS(ACME 또는 지문 핀닝 자체서명), 암호 터널(직접+릴레이), Split-DNS+서비스
+레지스트리, L4 라우터, 데스크톱 앱(트레이+서비스+IPC), Windows 설치파일, 자동 업데이트.
+남음: ACL, 다중 네트워크 클라이언트, 서비스별 VIP + 전-포트 투명 포워더(TCP+UDP), NAT 트래버설,
+IPv6 전송, 코드 서명.
 
 설계·계획: [`구현계획.md`](./구현계획.md), [`MyWAN_가상네트워크_아이디어_정리.md`](./MyWAN_가상네트워크_아이디어_정리.md)
 

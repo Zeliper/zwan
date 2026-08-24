@@ -2,6 +2,8 @@ export namespace engine {
 	
 	export class Status {
 	    connected: boolean;
+	    server: string;
+	    pinned: boolean;
 	    networkId: string;
 	    dnsSuffix: string;
 	    overlayCidr: string;
@@ -21,6 +23,8 @@ export namespace engine {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.connected = source["connected"];
+	        this.server = source["server"];
+	        this.pinned = source["pinned"];
 	        this.networkId = source["networkId"];
 	        this.dnsSuffix = source["dnsSuffix"];
 	        this.overlayCidr = source["overlayCidr"];
@@ -65,6 +69,9 @@ export namespace main {
 	    token: string;
 	    controlAddr: string;
 	    relayAddr: string;
+	    tlsMode: string;
+	    pin: string;
+	    joinUrl: string;
 	    peers: proto.Peer[];
 	    services: proto.Service[];
 	
@@ -81,6 +88,9 @@ export namespace main {
 	        this.token = source["token"];
 	        this.controlAddr = source["controlAddr"];
 	        this.relayAddr = source["relayAddr"];
+	        this.tlsMode = source["tlsMode"];
+	        this.pin = source["pin"];
+	        this.joinUrl = source["joinUrl"];
 	        this.peers = this.convertValues(source["peers"], proto.Peer);
 	        this.services = this.convertValues(source["services"], proto.Service);
 	    }

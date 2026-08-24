@@ -37,6 +37,7 @@ func (h *handler) Connect(a ipc.ConnectArgs) error {
 	h.eng.Stop()
 	return h.eng.Start(engine.Config{
 		Server:      a.Server,
+		Pin:         a.Pin,
 		Token:       a.Token,
 		DeviceUUID:  dev,
 		Name:        a.Name,
@@ -46,7 +47,7 @@ func (h *handler) Connect(a ipc.ConnectArgs) error {
 	})
 }
 
-func (h *handler) Disconnect() error { h.eng.Stop(); return nil }
+func (h *handler) Disconnect() error     { h.eng.Stop(); return nil }
 func (h *handler) Status() engine.Status { return h.eng.Status() }
 
 // program is the svc.Handler.

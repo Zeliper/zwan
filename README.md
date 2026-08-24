@@ -27,6 +27,7 @@ independent networks at once**. Open source, no central dependency.
 
 - 🔐 **Encrypted overlay** — WireGuard data plane (userspace `wireguard-go` + Wintun on Windows).
 - 🏠 **Self-hosted** — run your own control server + relay; no third party in the loop.
+- 🔏 **TLS by default** — the control API gets an automatic Let's Encrypt certificate when you have a domain, and a pinned self-signed key when you only have an IP.
 - 🌐 **Works behind NAT** — clients tunnel through your public-IP server's relay when a direct path isn't available.
 - 🧭 **Name-based access** — split-DNS resolver maps `service.<your-suffix>` to the right node.
 - 🚪 **L4 service router** — publish a service and keep the real backend bound to `127.0.0.1` (never exposed on the LAN/internet).
@@ -48,6 +49,10 @@ flowchart LR
   A -. relay fallback .-> RELAY
   RELAY -. relay fallback .-> B
 ```
+
+The control channel is **TLS**. With a domain the certificate is issued automatically over
+ACME; without one the server keeps a self-signed key and publishes its fingerprint (pin),
+which the client verifies instead of a CA chain — so an IP-only server is authenticated too.
 
 The **control plane** (server) only exchanges membership, endpoints, service and DNS
 records. The **data plane** is peer-to-peer WireGuard; when peers can't reach each other
@@ -73,27 +78,46 @@ and starts at login. It auto-updates from future releases.
 
 **1. Host a network** (on a machine with a public IP):
 
+*With a domain* pointed at the box — a real certificate is issued automatically over ACME:
+
 ```bash
 ./zwan-server-linux-amd64 \
   --token YOUR-SECRET-TOKEN \
   --network home --dns-suffix home.zwan \
-  --addr 0.0.0.0:8787 \
-  --relay-public YOUR.PUBLIC.IP:3478 \
+  --addr 0.0.0.0:443 --domain vpn.example.com \
+  --relay-public vpn.example.com:3478 \
   --auto-update
 ```
 
-Open TCP `8787` (control) and UDP `3478` (relay) on your firewall.
+*Without a domain* — the server keeps a self-signed key and prints the pin clients verify:
+
+```bash
+./zwan-server-linux-amd64 \
+  --token YOUR-SECRET-TOKEN \
+  --network home --dns-suffix home.zwan \
+  --addr 0.0.0.0:8787 --public-host YOUR.PUBLIC.IP:8787 \
+  --relay-public YOUR.PUBLIC.IP:3478
+```
+
+Either way it prints the address to hand out, pin included:
+
+```text
+clients join with: --server "https://YOUR.PUBLIC.IP:8787#sha256:NMuaxTGRTKlRnx..." --token <token>
+```
+
+Open the control port (TCP `443` or `8787`) and UDP `3478` (relay) on your firewall. When
+ACME runs on a port other than 443, also open TCP `80` for the HTTP-01 challenge.
 
 **2. Join from a client:**
 
-- **Desktop:** run `zwan-setup.exe`, open **zwan**, **Join** → server `http://YOUR.PUBLIC.IP:8787`, token, connect.
-- **Or host from the desktop:** the app's **Host** tab runs a server in-process and generates a token to share.
+- **Desktop:** run `zwan-setup.exe`, open **zwan**, **Join** → paste the whole join address into **Server** (the pin is split out for you), add the token, connect.
+- **Or host from the desktop:** the app's **Host** tab runs a server in-process, picks the TLS mode, and shows the join address + token to share.
 
 **3. Publish a service** (keep the backend on localhost):
 
 ```bash
 # on the node that runs, say, a game server on 127.0.0.1:31001
-zwan-agent --server http://YOUR.PUBLIC.IP:8787 --token YOUR-SECRET-TOKEN \
+zwan-agent --server "https://YOUR.PUBLIC.IP:8787#sha256:NMuaxTGRTKlRnx..." --token YOUR-SECRET-TOKEN \
   --device my-nas --name nas --up --relay \
   --publish-name minecraft --publish-port 25565 --publish-backend-port 31001
 ```
@@ -118,21 +142,22 @@ scripts/build-release.sh 0.1.1   # all release artifacts -> dist/
 
 ```
 cmd/            zwan-server (control plane) · zwan-agent (CLI) · zwan-service (SYSTEM service)
-server/         api · ipam · store · relay · host
+server/         api · ipam · store · relay · host · tlsconf (ACME / self-signed)
 client/         engine · tun · wg · wgbind · resolver · l4 · join · ipc · profile · update
-shared/         proto · keys
+shared/         proto · keys · certpin (SPKI pinning)
 gui/            Wails v2 desktop app (React + Tailwind + shadcn/ui)
 installer/      NSIS installer (client + service + Wintun driver)
 ```
 
 ## Status & roadmap
 
-Working today: control plane, encrypted tunnel (direct + relay), split-DNS + service
-registry, L4 service router, desktop app (tray + service + IPC), Windows installer,
-auto-update. Verified end-to-end minus the parts that need Administrator / two machines.
+Working today: control plane over TLS (ACME or pinned self-signed), encrypted tunnel
+(direct + relay), split-DNS + service registry, L4 service router, desktop app (tray +
+service + IPC), Windows installer, auto-update. Verified end-to-end minus the parts that
+need Administrator / two machines.
 
-On the roadmap: TLS/ACME for the control API (currently plain HTTP), ACLs, client-local
-VIP indirection + UDP proxy, IPv6 transport, and code signing.
+On the roadmap: ACLs, multi-network client, per-service VIPs with an all-ports transparent
+forwarder (TCP + UDP), NAT traversal, IPv6 transport, and code signing.
 
 See [`구현계획.md`](./구현계획.md) (implementation plan) and
 [`MyWAN_가상네트워크_아이디어_정리.md`](./MyWAN_가상네트워크_아이디어_정리.md) (design notes).
@@ -144,9 +169,12 @@ no GPL/AGPL/LGPL (see [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md)).
 
 ## Security
 
-Pre-release software. The control API is plain HTTP for now; run it behind TLS or a
-tunnel if it carries anything sensitive, and treat tokens as secrets. Found a
-vulnerability? Please open a private report rather than a public issue.
+Pre-release software. The control API speaks TLS by default — ACME with `--domain`, and a
+persistent self-signed key otherwise, which clients authenticate by pin. Hand that pin over
+a channel you trust (it is part of the printed join address); a client given no pin falls
+back to normal CA verification and will refuse a self-signed server. `--tls=off` remains
+for local testing and reverse-proxy setups and sends tokens in the clear. Treat join tokens
+as secrets. Found a vulnerability? Please open a private report rather than a public issue.
 
 ## License
 

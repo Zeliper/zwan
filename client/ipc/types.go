@@ -7,9 +7,12 @@ import "github.com/Zeliper/zwan/client/engine"
 // PipeName is the named pipe the service listens on.
 const PipeName = `\\.\pipe\zwan-engine`
 
-// ConnectArgs are the fields the UI supplies to join/connect a network.
+// ConnectArgs are the fields the UI supplies to join/connect a network. Pin is
+// the control server key fingerprint (empty when the server has a CA-issued
+// certificate); it may also travel inside Server as a "#<pin>" fragment.
 type ConnectArgs struct {
 	Server   string `json:"server"`
+	Pin      string `json:"pin"`
 	Token    string `json:"token"`
 	Name     string `json:"name"`
 	UseRelay bool   `json:"useRelay"`

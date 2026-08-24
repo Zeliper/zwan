@@ -10,8 +10,8 @@ export function CheckUpdate() {
   return window['go']['main']['App']['CheckUpdate']();
 }
 
-export function Connect(arg1, arg2, arg3, arg4) {
-  return window['go']['main']['App']['Connect'](arg1, arg2, arg3, arg4);
+export function Connect(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['Connect'](arg1, arg2, arg3, arg4, arg5);
 }
 
 export function Disconnect() {
@@ -22,8 +22,8 @@ export function HostGenToken() {
   return window['go']['main']['App']['HostGenToken']();
 }
 
-export function HostStart(arg1, arg2, arg3, arg4, arg5, arg6) {
-  return window['go']['main']['App']['HostStart'](arg1, arg2, arg3, arg4, arg5, arg6);
+export function HostStart(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9) {
+  return window['go']['main']['App']['HostStart'](arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9);
 }
 
 export function HostStatus() {

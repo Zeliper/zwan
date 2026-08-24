@@ -16,7 +16,7 @@ MyWAN는 Apache-2.0로 배포되며, 아래 제3자 구성요소를 사용한다
 | fyne.io/systray | 트레이 상주 | Apache-2.0 / MIT | |
 | github.com/wailsapp/wails/v2 | 데스크톱 GUI 셸 | MIT | WebView2 런타임 = Microsoft 재배포 허용(프로프라이어터리 런타임) |
 | React, Vite, Tailwind CSS, Radix UI, shadcn/ui | GUI 프론트엔드 | MIT | shadcn/ui는 복사형 컴포넌트(MIT) |
-| golang.org/x/sys, golang.org/x/crypto | 시스템/암호 유틸 | BSD-3 | |
+| golang.org/x/sys, golang.org/x/crypto | 시스템/암호 유틸, 컨트롤 API TLS(`acme/autocert`) | BSD-3 | ACME 클라이언트가 표준 라이브러리 계열이라 별도 의존성 추가 없음 |
 
 ## 금지 목록 (예시)
 - `wireguard-windows` 앱 코드(GPLv2) — **차용 금지**(참고만, 재구현).

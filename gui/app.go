@@ -5,7 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
-	"net"
+	"strings"
 
 	"github.com/Zeliper/zwan/client/engine"
 	"github.com/Zeliper/zwan/client/ipc"
@@ -21,8 +21,9 @@ import (
 // service via client/ipc) and an in-process server host (server/host), so one
 // app can join networks and host one.
 type App struct {
-	ctx context.Context
-	srv *host.Host
+	ctx        context.Context
+	srv        *host.Host
+	publicHost string // host:port to advertise in the join address
 }
 
 // NewApp creates the App.
@@ -38,9 +39,11 @@ func (a *App) ServiceUp() bool {
 	return err == nil
 }
 
-// Connect asks the service to join and bring up a network.
-func (a *App) Connect(server, token, name string, useRelay bool) (*engine.Status, error) {
-	resp, err := ipc.Connect(ipc.ConnectArgs{Server: server, Token: token, Name: name, UseRelay: useRelay})
+// Connect asks the service to join and bring up a network. pin is the control
+// server's key fingerprint, needed when it has no CA-issued certificate; it may
+// be left empty and pasted inside server as a "#<pin>" fragment instead.
+func (a *App) Connect(server, pin, token, name string, useRelay bool) (*engine.Status, error) {
+	resp, err := ipc.Connect(ipc.ConnectArgs{Server: server, Pin: pin, Token: token, Name: name, UseRelay: useRelay})
 	if err != nil {
 		return nil, err
 	}
@@ -79,6 +82,9 @@ type HostState struct {
 	Token       string          `json:"token"`
 	ControlAddr string          `json:"controlAddr"`
 	RelayAddr   string          `json:"relayAddr"`
+	TLSMode     string          `json:"tlsMode"` // "self", "acme" or "off"
+	Pin         string          `json:"pin"`     // key fingerprint clients must pin
+	JoinURL     string          `json:"joinUrl"` // server address + pin, ready to hand out
 	Peers       []proto.Peer    `json:"peers"`
 	Services    []proto.Service `json:"services"`
 }
@@ -90,8 +96,11 @@ func (a *App) HostGenToken() string {
 	return hex.EncodeToString(b)
 }
 
-// HostStart starts hosting a network in-process.
-func (a *App) HostStart(networkID, suffix, cidr, token, controlAddr, relayAddr string) error {
+// HostStart starts hosting a network in-process. tlsMode is "auto", "self",
+// "acme" or "off"; domain is a comma-separated list of public hostnames for an
+// ACME certificate, and publicHost overrides the address shown to joiners.
+func (a *App) HostStart(networkID, suffix, cidr, token, controlAddr, relayAddr, tlsMode, domain, publicHost string) error {
+	a.publicHost = strings.TrimSpace(publicHost)
 	return a.srv.Start(host.Config{
 		NetworkID:   networkID,
 		DNSSuffix:   suffix,
@@ -99,6 +108,8 @@ func (a *App) HostStart(networkID, suffix, cidr, token, controlAddr, relayAddr s
 		Token:       token,
 		ControlAddr: controlAddr,
 		RelayAddr:   relayAddr,
+		TLSMode:     tlsMode,
+		TLSDomains:  splitList(domain),
 	})
 }
 
@@ -111,14 +122,17 @@ func (a *App) HostStatus() *HostState {
 	st := &HostState{
 		Running: a.srv.Running(), NetworkID: c.NetworkID, DNSSuffix: c.DNSSuffix, CIDR: c.CIDR,
 		Token: c.Token, ControlAddr: c.ControlAddr, RelayAddr: c.RelayAddr,
+		TLSMode: a.srv.TLSMode(), Pin: a.srv.Pin(), JoinURL: a.srv.JoinURL(a.publicHost),
 	}
 	if a.srv.Running() {
-		base := "http://" + localAddr(c.ControlAddr)
-		if p, err := join.FetchPeers(base); err == nil {
-			st.Peers = p
-		}
-		if s, err := join.FetchServices(base); err == nil {
-			st.Services = s
+		// Query our own control API the same way a client would, pin included.
+		if cl, err := join.NewClient(a.srv.LocalURL(), a.srv.Pin()); err == nil {
+			if p, err := cl.Peers(); err == nil {
+				st.Peers = p
+			}
+			if s, err := cl.Services(); err == nil {
+				st.Services = s
+			}
 		}
 	}
 	return st
@@ -151,14 +165,13 @@ func (a *App) QuitApp() {
 	}
 }
 
-// localAddr rewrites a wildcard listen address to loopback for local queries.
-func localAddr(addr string) string {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return addr
+// splitList parses a comma-separated field from the UI.
+func splitList(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
 	}
-	if host == "" || host == "0.0.0.0" || host == "::" {
-		host = "127.0.0.1"
-	}
-	return net.JoinHostPort(host, port)
+	return out
 }

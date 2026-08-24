@@ -27,7 +27,8 @@ import (
 
 // Config controls a single connection.
 type Config struct {
-	Server      string // control server base URL
+	Server      string // control server base URL (may carry "#<pin>")
+	Pin         string // server key pin; overrides one embedded in Server
 	Token       string
 	DeviceUUID  string
 	Name        string
@@ -41,6 +42,8 @@ type Config struct {
 // Status is a snapshot of the connection for the UI/IPC.
 type Status struct {
 	Connected   bool            `json:"connected"`
+	Server      string          `json:"server"` // normalized control server URL
+	Pinned      bool            `json:"pinned"` // server verified by key pin rather than a CA
 	NetworkID   string          `json:"networkId"`
 	DNSSuffix   string          `json:"dnsSuffix"`
 	OverlayCIDR string          `json:"overlayCidr"`
@@ -100,8 +103,14 @@ func (e *Engine) Start(cfg Config) error {
 	e.st = Status{}
 	e.mu.Unlock()
 
+	cl, err := join.NewClient(cfg.Server, cfg.Pin)
+	if err != nil {
+		e.setErr("control server: %v", err)
+		return err
+	}
+
 	endpoint := fmt.Sprintf("127.0.0.1:%d", cfg.WGPort)
-	res, err := join.Do(cfg.Server, cfg.Token, cfg.DeviceUUID, cfg.Name, endpoint)
+	res, err := cl.Join(cfg.Token, cfg.DeviceUUID, cfg.Name, endpoint)
 	if err != nil {
 		e.setErr("join: %v", err)
 		return err
@@ -171,7 +180,8 @@ func (e *Engine) Start(cfg Config) error {
 	e.stop = make(chan struct{})
 	e.done = make(chan struct{})
 	e.st = Status{
-		Connected: true, NetworkID: res.Register.NetworkID, DNSSuffix: res.Register.DNSSuffix,
+		Connected: true, Server: cl.BaseURL(), Pinned: cl.Pin() != "",
+		NetworkID: res.Register.NetworkID, DNSSuffix: res.Register.DNSSuffix,
 		OverlayCIDR: res.Register.OverlayCIDR, AssignedIP: res.Register.AssignedIP,
 		RelayAddr: res.Register.RelayAddr, PublicKey: res.PublicKey, Via: via,
 		Handshakes: map[string]bool{},
@@ -180,7 +190,7 @@ func (e *Engine) Start(cfg Config) error {
 	done := e.done
 	e.mu.Unlock()
 
-	go e.run(dev, ad, rslv, res.Register.AssignedIP, res.Register.DNSSuffix, cfg, stop, done)
+	go e.run(cl, dev, ad, rslv, res.Register.AssignedIP, res.Register.DNSSuffix, cfg, stop, done)
 	return nil
 }
 
@@ -200,7 +210,7 @@ func (e *Engine) Stop() {
 	e.mu.Unlock()
 }
 
-func (e *Engine) run(dev *wg.Device, ad *tun.Adapter, rslv *resolver.Resolver, selfIP, suffix string, cfg Config, stop, done chan struct{}) {
+func (e *Engine) run(cl *join.Client, dev *wg.Device, ad *tun.Adapter, rslv *resolver.Resolver, selfIP, suffix string, cfg Config, stop, done chan struct{}) {
 	defer close(done)
 	defer func() {
 		if rslv != nil {
@@ -219,7 +229,7 @@ func (e *Engine) run(dev *wg.Device, ad *tun.Adapter, rslv *resolver.Resolver, s
 	defer tick.Stop()
 
 	apply := func() {
-		peers, err := join.FetchPeers(cfg.Server)
+		peers, err := cl.Peers()
 		if err != nil {
 			log.Printf("engine: peer refresh: %v", err)
 			return
@@ -252,7 +262,7 @@ func (e *Engine) run(dev *wg.Device, ad *tun.Adapter, rslv *resolver.Resolver, s
 			lastSig, curPeers = sig, wgPeers
 		}
 
-		svcs, _ := join.FetchServices(cfg.Server)
+		svcs, _ := cl.Services()
 		updateDNS(rslv, suffix, peers, svcs)
 		manageHostProxies(hostProxies, selfIP, svcs)
 

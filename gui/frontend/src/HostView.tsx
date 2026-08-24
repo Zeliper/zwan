@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Copy, Play, RefreshCw, Server, Square, Users, Share2 } from 'lucide-react'
+import { Copy, Play, RefreshCw, Server, Square, Users, Share2, ShieldAlert, ShieldCheck } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -26,6 +26,9 @@ interface HostState {
   token: string
   controlAddr: string
   relayAddr: string
+  tlsMode: string
+  pin: string
+  joinUrl: string
   peers: Peer[]
   services: Service[]
 }
@@ -37,6 +40,9 @@ export default function HostView() {
   const [token, setToken] = useState('')
   const [controlAddr, setControlAddr] = useState('0.0.0.0:8787')
   const [relayAddr, setRelayAddr] = useState('0.0.0.0:3478')
+  const [tlsMode, setTlsMode] = useState('auto')
+  const [domain, setDomain] = useState('')
+  const [publicHost, setPublicHost] = useState('')
   const [state, setState] = useState<HostState | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -72,7 +78,7 @@ export default function HostView() {
     setBusy(true)
     setError('')
     try {
-      await HostStart(networkId, suffix, cidr, token, controlAddr, relayAddr)
+      await HostStart(networkId, suffix, cidr, token, controlAddr, relayAddr, tlsMode, domain, publicHost)
       await refresh()
     } catch (e: any) {
       setError(String(e?.message ?? e))
@@ -134,6 +140,48 @@ export default function HostView() {
               <Input id="relay" value={relayAddr} onChange={(e) => setRelayAddr(e.target.value)} className="font-mono" />
             </div>
           </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="tls">TLS</Label>
+            <select
+              id="tls"
+              value={tlsMode}
+              onChange={(e) => setTlsMode(e.target.value)}
+              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            >
+              <option value="auto">Automatic — certificate for the domain, otherwise a pinned key</option>
+              <option value="self">Self-signed key, clients pin it</option>
+              <option value="acme">Public certificate (ACME) for the domain</option>
+              <option value="off">Off — plaintext HTTP (local testing only)</option>
+            </select>
+            {tlsMode === 'off' && (
+              <p className="text-xs text-destructive">Join tokens and all control traffic would be sent unencrypted.</p>
+            )}
+          </div>
+          {tlsMode !== 'off' && (
+            <div className="space-y-1.5">
+              <Label htmlFor="domain">Domain (optional)</Label>
+              <Input
+                id="domain"
+                value={domain}
+                onChange={(e) => setDomain(e.target.value)}
+                placeholder="vpn.example.com — leave empty to use a pinned key"
+                className="font-mono"
+              />
+              <p className="text-xs text-muted-foreground">
+                With a domain pointed at this machine, a certificate is issued automatically (needs port 443, or port 80 reachable).
+              </p>
+            </div>
+          )}
+          <div className="space-y-1.5">
+            <Label htmlFor="public">Public address (optional)</Label>
+            <Input
+              id="public"
+              value={publicHost}
+              onChange={(e) => setPublicHost(e.target.value)}
+              placeholder="203.0.113.5:8787 — what clients should connect to"
+              className="font-mono"
+            />
+          </div>
           {error && <p className="text-sm text-destructive">{error}</p>}
           <Button className="w-full" onClick={start} disabled={busy || !token}>
             <Play className="h-4 w-4" /> Start hosting
@@ -165,6 +213,17 @@ export default function HostView() {
         </CardHeader>
         <CardContent className="space-y-2 text-sm">
           <div className="flex items-center justify-between gap-2">
+            <span className="shrink-0 text-muted-foreground">Join address</span>
+            <span className="flex min-w-0 items-center gap-2">
+              <span className="truncate font-mono" title={state!.joinUrl}>
+                {state!.joinUrl}
+              </span>
+              <Button variant="ghost" size="icon" onClick={() => navigator.clipboard?.writeText(state!.joinUrl)} title="Copy">
+                <Copy className="h-4 w-4" />
+              </Button>
+            </span>
+          </div>
+          <div className="flex items-center justify-between gap-2">
             <span className="text-muted-foreground">Token</span>
             <span className="flex items-center gap-2">
               <span className="font-mono">{state!.token}</span>
@@ -181,6 +240,28 @@ export default function HostView() {
             <span className="text-muted-foreground">Relay</span>
             <span className="font-mono">{state!.relayAddr}</span>
           </div>
+          <div className="flex items-center justify-between gap-2">
+            <span className="shrink-0 text-muted-foreground">Trust</span>
+            <span className={`flex min-w-0 items-center gap-1.5 ${state!.tlsMode === 'off' ? 'text-destructive' : ''}`}>
+              {state!.tlsMode === 'off' ? <ShieldAlert className="h-4 w-4 shrink-0" /> : <ShieldCheck className="h-4 w-4 shrink-0" />}
+              <span className="truncate font-mono" title={state!.pin || state!.tlsMode}>
+                {state!.tlsMode === 'off' ? 'plaintext — no TLS' : state!.tlsMode === 'acme' ? 'ACME certificate' : state!.pin}
+              </span>
+              {state!.pin && (
+                <Button variant="ghost" size="icon" onClick={() => navigator.clipboard?.writeText(state!.pin)} title="Copy pin">
+                  <Copy className="h-4 w-4" />
+                </Button>
+              )}
+            </span>
+          </div>
+          <p className="pt-1 text-xs text-muted-foreground">
+            The join address already contains the key pin — clients can paste it into the Server field as-is.
+          </p>
+          {/loopback|127\.0\.0\.1|localhost/.test(state!.joinUrl) && (
+            <p className="text-xs text-muted-foreground">
+              It points at this machine. Restart with a public address filled in so remote clients get a reachable host.
+            </p>
+          )}
         </CardContent>
       </Card>
 

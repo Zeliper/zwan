@@ -33,7 +33,8 @@ import (
 )
 
 func main() {
-	server := flag.String("server", "http://127.0.0.1:8787", "control server URL")
+	server := flag.String("server", "https://127.0.0.1:8787", "control server URL (may carry the key pin as \"#sha256:...\")")
+	pin := flag.String("pin", "", "control server key fingerprint; required when the server has no CA-issued certificate")
 	token := flag.String("token", "", "join token")
 	device := flag.String("device", "", "stable device UUID")
 	name := flag.String("name", "", "hostname label (defaults to OS hostname)")
@@ -63,7 +64,12 @@ func main() {
 		ep = fmt.Sprintf("127.0.0.1:%d", *wgPort)
 	}
 
-	res, err := join.Do(*server, *token, *device, hostname, ep)
+	cl, err := join.NewClient(*server, *pin)
+	if err != nil {
+		log.Fatalf("control server: %v", err)
+	}
+	log.Printf("control server: %s (%s)", cl.BaseURL(), trustLabel(cl))
+	res, err := cl.Join(*token, *device, hostname, ep)
 	if err != nil {
 		log.Fatalf("join failed: %v", err)
 	}
@@ -77,7 +83,7 @@ func main() {
 			log.Fatal("--publish-port is required with --publish-name")
 		}
 		svc := proto.Service{Name: *publishName, Proto: *publishProto, Port: *publishPort, BackendPort: *publishBackend, NodeIP: res.Register.AssignedIP}
-		if err := join.PublishService(*server, *token, svc); err != nil {
+		if err := cl.PublishService(*token, svc); err != nil {
 			log.Fatalf("publish service: %v", err)
 		}
 		log.Printf("published service %s.%s -> %s:%d/%s (backend 127.0.0.1:%d)",
@@ -91,7 +97,7 @@ func main() {
 
 	switch {
 	case *useUp:
-		runTunnel(res, *server, adapterName, *wgPort, *useRelay, *dnsAddr)
+		runTunnel(cl, res, adapterName, *wgPort, *useRelay, *dnsAddr)
 	case *useTun:
 		bringUpAdapter(res, adapterName)
 	default:
@@ -125,7 +131,7 @@ func bringUpAdapter(res *join.Result, adapterName string) {
 // runTunnel (M1b-2/M1b-3): adapter + wireguard-go device + periodic peer refresh.
 // With useRelay, the tunnel is carried through the server relay (M1b-3); otherwise
 // it uses direct peer endpoints (M1b-2).
-func runTunnel(res *join.Result, serverURL, adapterName string, wgPort int, useRelay bool, dnsAddr string) {
+func runTunnel(cl *join.Client, res *join.Result, adapterName string, wgPort int, useRelay bool, dnsAddr string) {
 	log.Printf("creating adapter %q ...", adapterName)
 	ad, err := tun.Create(adapterName, tun.DefaultMTU)
 	if err != nil {
@@ -179,7 +185,7 @@ func runTunnel(res *join.Result, serverURL, adapterName string, wgPort int, useR
 	}
 
 	stop := make(chan struct{})
-	go refreshPeers(dev, ad, rslv, serverURL, res.Register.DNSSuffix, res.Register.AssignedIP, useRelay, stop)
+	go refreshPeers(cl, dev, ad, rslv, res.Register.DNSSuffix, res.Register.AssignedIP, useRelay, stop)
 	waitForInterrupt()
 	close(stop)
 }
@@ -190,7 +196,7 @@ func runTunnel(res *join.Result, serverURL, adapterName string, wgPort int, useR
 // The WireGuard peer set is only re-applied when it actually changes: re-sending
 // replace_peers on every tick would reset in-flight handshakes (which take a few
 // seconds) and they would never complete.
-func refreshPeers(dev *wg.Device, ad *tun.Adapter, rslv *resolver.Resolver, serverURL, suffix, selfIP string, useRelay bool, stop <-chan struct{}) {
+func refreshPeers(cl *join.Client, dev *wg.Device, ad *tun.Adapter, rslv *resolver.Resolver, suffix, selfIP string, useRelay bool, stop <-chan struct{}) {
 	routed := map[string]bool{}
 	hostProxies := map[string]*l4.TCPProxy{}
 	var lastSig string
@@ -199,7 +205,7 @@ func refreshPeers(dev *wg.Device, ad *tun.Adapter, rslv *resolver.Resolver, serv
 	defer tick.Stop()
 
 	apply := func() {
-		peers, err := join.FetchPeers(serverURL)
+		peers, err := cl.Peers()
 		if err != nil {
 			log.Printf("peer refresh: %v", err)
 			return
@@ -245,7 +251,7 @@ func refreshPeers(dev *wg.Device, ad *tun.Adapter, rslv *resolver.Resolver, serv
 		}
 		logHandshakes(dev, curPeers)
 
-		svcs, serr := join.FetchServices(serverURL)
+		svcs, serr := cl.Services()
 		if serr != nil {
 			log.Printf("service refresh: %v", serr)
 		}
@@ -350,4 +356,16 @@ func waitForInterrupt() {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt)
 	<-sig
+}
+
+// trustLabel describes how the control server's identity was verified.
+func trustLabel(cl *join.Client) string {
+	switch {
+	case strings.HasPrefix(cl.BaseURL(), "http://"):
+		return "plaintext - no server authentication"
+	case cl.Pin() != "":
+		return "TLS, pinned " + cl.Pin()
+	default:
+		return "TLS, CA-verified"
+	}
 }

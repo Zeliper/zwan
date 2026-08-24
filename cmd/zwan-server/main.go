@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strings"
 	"time"
 
 	"github.com/Zeliper/zwan/client/update"
@@ -26,13 +27,21 @@ func main() {
 		return
 	}
 
-	addr := flag.String("addr", "127.0.0.1:8787", "control API listen address (TLS/ACME on :443 in M5)")
+	addr := flag.String("addr", "127.0.0.1:8787", "control API listen address (use :443 with --domain for ACME)")
 	netID := flag.String("network", "demo", "network id")
 	suffix := flag.String("dns-suffix", "demo.zwan", "DNS suffix / namespace for this network")
 	cidr := flag.String("cidr", "100.64.0.0/16", "overlay CIDR")
 	token := flag.String("token", "", "join token (required)")
 	relayAddr := flag.String("relay-addr", "127.0.0.1:3478", "relay UDP listen address")
 	relayPublic := flag.String("relay-public", "", "relay host:port advertised to clients (default = relay-addr)")
+	tlsMode := flag.String("tls", "auto", "TLS mode: auto (ACME with --domain, else self-signed), off, self, acme")
+	domains := flag.String("domain", "", "comma-separated public hostnames for the ACME certificate")
+	tlsSANs := flag.String("tls-san", "", "comma-separated extra hostnames/IPs for the self-signed certificate")
+	tlsDir := flag.String("tls-dir", "", "directory for the TLS key, certificate and ACME cache (default: machine state dir)")
+	acmeEmail := flag.String("acme-email", "", "contact address for the ACME account")
+	acmeDirectory := flag.String("acme-directory", "", "ACME directory URL override (e.g. Let's Encrypt staging)")
+	acmeHTTPAddr := flag.String("acme-http-addr", ":80", "HTTP-01 challenge listen address (used when --addr is not :443)")
+	publicHost := flag.String("public-host", "", "host:port clients should connect to, for the printed join address")
 	autoUpdate := flag.Bool("auto-update", false, "periodically self-update to the latest release and restart")
 	updateEvery := flag.Duration("auto-update-interval", 6*time.Hour, "how often to check for updates with --auto-update")
 	flag.Parse()
@@ -43,19 +52,30 @@ func main() {
 
 	h := host.New()
 	if err := h.Start(host.Config{
-		NetworkID:   *netID,
-		DNSSuffix:   *suffix,
-		CIDR:        *cidr,
-		Token:       *token,
-		ControlAddr: *addr,
-		RelayAddr:   *relayAddr,
-		RelayPublic: *relayPublic,
+		NetworkID:     *netID,
+		DNSSuffix:     *suffix,
+		CIDR:          *cidr,
+		Token:         *token,
+		ControlAddr:   *addr,
+		RelayAddr:     *relayAddr,
+		RelayPublic:   *relayPublic,
+		TLSMode:       *tlsMode,
+		TLSDomains:    splitList(*domains),
+		TLSExtraSANs:  splitList(*tlsSANs),
+		TLSDir:        *tlsDir,
+		ACMEEmail:     *acmeEmail,
+		ACMEDirectory: *acmeDirectory,
+		ACMEHTTPAddr:  *acmeHTTPAddr,
 	}); err != nil {
 		log.Fatalf("start: %v", err)
 	}
 
-	log.Printf("%s (%s) %s: control on %s, relay on %s (network=%s suffix=%s cidr=%s)",
-		shared.ProductName, shared.ComponentServer, shared.Version, *addr, *relayAddr, *netID, *suffix, *cidr)
+	log.Printf("%s (%s) %s: control on %s (%s), relay on %s (network=%s suffix=%s cidr=%s)",
+		shared.ProductName, shared.ComponentServer, shared.Version, *addr, trustLabel(h), *relayAddr, *netID, *suffix, *cidr)
+	log.Printf("clients join with: --server %q --token <token>", h.JoinURL(*publicHost))
+	if h.TLSMode() == "off" {
+		log.Print("WARNING: TLS is off - the join token and the whole control channel are sent in the clear")
+	}
 
 	if *autoUpdate {
 		go autoUpdateLoop(*updateEvery)
@@ -110,4 +130,29 @@ func restartSelf() {
 		return
 	}
 	os.Exit(0)
+}
+
+// splitList parses a comma-separated flag value.
+func splitList(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// trustLabel describes how clients verify this server's identity.
+func trustLabel(h *host.Host) string {
+	switch h.TLSMode() {
+	case "off":
+		return "plaintext HTTP"
+	case "self":
+		return "TLS, self-signed - clients must pin " + h.Pin()
+	case "acme":
+		return "TLS, ACME certificate"
+	default:
+		return h.TLSMode()
+	}
 }

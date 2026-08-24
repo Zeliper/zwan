@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertTriangle, Loader2, Network, Power, Radio, Server, Share2 } from 'lucide-react'
+import { AlertTriangle, Loader2, Network, Power, Radio, Server, Share2, ShieldAlert, ShieldCheck } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -22,6 +22,8 @@ interface Service {
 }
 interface EngineStatus {
   connected: boolean
+  server: string
+  pinned: boolean
   networkId: string
   dnsSuffix: string
   overlayCidr: string
@@ -35,6 +37,14 @@ interface EngineStatus {
   lastError: string
 }
 
+// trustOf describes how the control server's identity was verified, mirroring
+// the server's own three modes: ACME certificate, pinned key, or no TLS at all.
+function trustOf(s: EngineStatus): { ok: boolean; label: string } {
+  if (s.server?.startsWith('http://')) return { ok: false, label: 'plaintext — not authenticated' }
+  if (s.pinned) return { ok: true, label: 'TLS · pinned key' }
+  return { ok: true, label: 'TLS · CA certificate' }
+}
+
 function Row({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
     <div className="flex items-center justify-between gap-4 py-1.5 text-sm">
@@ -45,7 +55,8 @@ function Row({ label, value, mono }: { label: string; value: string; mono?: bool
 }
 
 export default function ClientView() {
-  const [server, setServer] = useState('http://127.0.0.1:8787')
+  const [server, setServer] = useState('https://127.0.0.1:8787')
+  const [pin, setPin] = useState('')
   const [token, setToken] = useState('')
   const [name, setName] = useState('')
   const [useRelay, setUseRelay] = useState(true)
@@ -82,13 +93,25 @@ export default function ClientView() {
     setBusy(true)
     setError('')
     try {
-      const s = (await Connect(server, token, name, useRelay)) as unknown as EngineStatus
+      const s = (await Connect(server, pin, token, name, useRelay)) as unknown as EngineStatus
       setStatus(s?.connected ? s : null)
     } catch (e: any) {
       setError(String(e?.message ?? e))
     } finally {
       setBusy(false)
     }
+  }
+
+  // The host hands out one string, "https://host:port#sha256:...". Accept it
+  // whole and split the pin out so both fields end up filled in.
+  function onServerInput(value: string) {
+    const hash = value.lastIndexOf('#')
+    if (hash < 0) {
+      setServer(value)
+      return
+    }
+    setServer(value.slice(0, hash).trim())
+    setPin(decodeURIComponent(value.slice(hash + 1)).trim())
   }
 
   async function disconnect() {
@@ -126,7 +149,17 @@ export default function ClientView() {
           <CardContent className="space-y-4">
             <div className="space-y-1.5">
               <Label htmlFor="server">Server</Label>
-              <Input id="server" value={server} onChange={(e) => setServer(e.target.value)} placeholder="http://host:8787" />
+              <Input id="server" value={server} onChange={(e) => onServerInput(e.target.value)} placeholder="https://host:8787" />
+              {server.startsWith('http://') && (
+                <p className="text-xs text-destructive">Plain http: the token and control traffic are sent unencrypted.</p>
+              )}
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="pin">Server key pin</Label>
+              <Input id="pin" value={pin} onChange={(e) => setPin(e.target.value)} placeholder="sha256:… (leave empty for a public domain)" />
+              <p className="text-xs text-muted-foreground">
+                Shown by the host. Required unless the server has a certificate for a public domain.
+              </p>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="token">Token</Label>
@@ -155,6 +188,10 @@ export default function ClientView() {
               <p className="text-sm text-muted-foreground">
                 *.{status!.dnsSuffix} · via {status!.via}
               </p>
+              <p className={`mt-0.5 flex items-center gap-1 text-xs ${trustOf(status!).ok ? 'text-muted-foreground' : 'text-destructive'}`}>
+                {trustOf(status!).ok ? <ShieldCheck className="h-3.5 w-3.5" /> : <ShieldAlert className="h-3.5 w-3.5" />}
+                {trustOf(status!).label}
+              </p>
             </div>
             <Button variant="outline" size="sm" onClick={disconnect} disabled={busy}>
               <Power className="h-4 w-4" /> Disconnect
@@ -168,6 +205,7 @@ export default function ClientView() {
               </CardTitle>
             </CardHeader>
             <CardContent>
+              <Row label="Control server" value={status!.server} mono />
               <Row label="Overlay IP" value={status!.assignedIp} mono />
               <Row label="Overlay CIDR" value={status!.overlayCidr} mono />
               <Row label="Relay" value={status!.relayAddr} mono />

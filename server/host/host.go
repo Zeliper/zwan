@@ -5,14 +5,20 @@ package host
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
+	"fmt"
+	"log"
 	"net"
 	"net/http"
+	"net/url"
 
 	"github.com/Zeliper/zwan/server/api"
 	"github.com/Zeliper/zwan/server/ipam"
 	"github.com/Zeliper/zwan/server/relay"
 	"github.com/Zeliper/zwan/server/store"
+	"github.com/Zeliper/zwan/server/tlsconf"
+	"github.com/Zeliper/zwan/shared"
 )
 
 // Config configures a hosted network.
@@ -24,13 +30,26 @@ type Config struct {
 	ControlAddr string // control API listen (host:port)
 	RelayAddr   string // relay UDP listen (host:port)
 	RelayPublic string // relay host:port advertised to clients (default = RelayAddr)
+
+	// TLS. Mode is "auto" (default), "off", "self" or "acme"; auto means ACME
+	// when Domains is set and a pinned self-signed certificate otherwise.
+	TLSMode       string
+	TLSDomains    []string // public hostnames for ACME (also SANs when self-signed)
+	TLSExtraSANs  []string // extra hostnames/IPs for the self-signed certificate
+	TLSDir        string   // state dir for key/cert/ACME cache (default: machine state dir)
+	ACMEEmail     string
+	ACMEDirectory string // ACME directory URL override (e.g. Let's Encrypt staging)
+	ACMEHTTPAddr  string // HTTP-01 challenge listen address (default ":80")
 }
 
 // Host is a running server instance.
 type Host struct {
-	cfg     Config
-	httpSrv *http.Server
-	rly     *relay.Relay
+	cfg      Config
+	ctrlAddr string // actual bound control address (resolves :0 and wildcards)
+	httpSrv  *http.Server
+	acmeSrv  *http.Server
+	rly      *relay.Relay
+	tlsRes   *tlsconf.Result
 }
 
 // New returns an idle host.
@@ -46,6 +65,29 @@ func (h *Host) Start(cfg Config) error {
 	if relayPub == "" {
 		relayPub = cfg.RelayAddr
 	}
+	mode, err := tlsconf.ParseMode(cfg.TLSMode)
+	if err != nil {
+		return err
+	}
+	dir := cfg.TLSDir
+	if dir == "" && mode != tlsconf.ModeOff {
+		if dir, err = shared.StateDir("tls"); err != nil {
+			return fmt.Errorf("tls state dir: %w", err)
+		}
+	}
+	tlsRes, err := tlsconf.Build(tlsconf.Config{
+		Mode:       mode,
+		Domains:    cfg.TLSDomains,
+		ExtraSANs:  cfg.TLSExtraSANs,
+		Dir:        dir,
+		Email:      cfg.ACMEEmail,
+		Directory:  cfg.ACMEDirectory,
+		ListenAddr: cfg.ControlAddr,
+	})
+	if err != nil {
+		return err
+	}
+
 	alloc, err := ipam.New(cfg.CIDR)
 	if err != nil {
 		return err
@@ -64,10 +106,27 @@ func (h *Host) Start(cfg Config) error {
 		_ = rly.Close()
 		return err
 	}
+	if tlsRes.TLS != nil {
+		ln = tls.NewListener(ln, tlsRes.TLS)
+	}
 	httpSrv := &http.Server{Handler: srv.Routes()}
 	go func() { _ = httpSrv.Serve(ln) }()
 
-	h.cfg, h.httpSrv, h.rly = cfg, httpSrv, rly
+	var acmeSrv *http.Server
+	if tlsRes.HTTPChallenge != nil {
+		addr := cfg.ACMEHTTPAddr
+		if addr == "" {
+			addr = ":80"
+		}
+		acmeSrv = &http.Server{Addr: addr, Handler: tlsRes.HTTPChallenge}
+		go func() {
+			if err := acmeSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Printf("host: ACME HTTP-01 listener on %s: %v (certificate issuance may fail)", addr, err)
+			}
+		}()
+	}
+
+	h.cfg, h.ctrlAddr, h.httpSrv, h.acmeSrv, h.rly, h.tlsRes = cfg, ln.Addr().String(), httpSrv, acmeSrv, rly, tlsRes
 	return nil
 }
 
@@ -77,10 +136,16 @@ func (h *Host) Stop() {
 		_ = h.httpSrv.Shutdown(context.Background())
 		h.httpSrv = nil
 	}
+	if h.acmeSrv != nil {
+		_ = h.acmeSrv.Shutdown(context.Background())
+		h.acmeSrv = nil
+	}
 	if h.rly != nil {
 		_ = h.rly.Close()
 		h.rly = nil
 	}
+	h.tlsRes = nil
+	h.ctrlAddr = ""
 }
 
 // Running reports whether the host is serving.
@@ -88,3 +153,78 @@ func (h *Host) Running() bool { return h.httpSrv != nil }
 
 // Config returns the running configuration.
 func (h *Host) Config() Config { return h.cfg }
+
+// TLSMode returns the resolved TLS mode ("off", "self" or "acme").
+func (h *Host) TLSMode() string {
+	if h.tlsRes == nil {
+		return ""
+	}
+	return string(h.tlsRes.Mode)
+}
+
+// Pin returns the SPKI fingerprint clients must pin, or "" when the server
+// presents a CA-issued certificate (or none at all).
+func (h *Host) Pin() string {
+	if h.tlsRes == nil {
+		return ""
+	}
+	return h.tlsRes.Pin
+}
+
+// Scheme is the URL scheme clients must use ("https", or "http" with TLS off).
+func (h *Host) Scheme() string {
+	if h.tlsRes == nil {
+		return "http"
+	}
+	return h.tlsRes.Scheme()
+}
+
+// LocalURL is the base URL for querying this server from the same machine.
+func (h *Host) LocalURL() string {
+	if !h.Running() {
+		return ""
+	}
+	return h.Scheme() + "://" + localAddr(h.ctrlAddr)
+}
+
+// JoinURL is the address to hand to clients: the first configured domain when
+// there is one, otherwise the listen address, with the pin appended as a
+// fragment so the whole thing can be copied as a single value.
+func (h *Host) JoinURL(publicHost string) string {
+	if h.tlsRes == nil {
+		return ""
+	}
+	hostport := publicHost
+	if hostport == "" {
+		if len(h.tlsRes.Domains) > 0 {
+			hostport = withPort(h.tlsRes.Domains[0], h.ctrlAddr)
+		} else {
+			hostport = localAddr(h.ctrlAddr)
+		}
+	}
+	u := h.Scheme() + "://" + hostport
+	if h.tlsRes.Pin != "" {
+		u += "#" + url.PathEscape(h.tlsRes.Pin)
+	}
+	return u
+}
+
+// withPort attaches the port from listenAddr to a bare hostname.
+func withPort(hostname, listenAddr string) string {
+	if _, p, err := net.SplitHostPort(listenAddr); err == nil && p != "" && p != "443" {
+		return net.JoinHostPort(hostname, p)
+	}
+	return hostname
+}
+
+// localAddr rewrites a wildcard listen address to loopback for local queries.
+func localAddr(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	return net.JoinHostPort(host, port)
+}
