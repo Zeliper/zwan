@@ -31,11 +31,18 @@ Wails CLI    go install github.com/wailsapp/wails/v2/cmd/wails@latest   (GUI 단
 gcc(MSYS2)   cgo용 (설치됨)
 ```
 
-## 빌드 (M0 스켈레톤)
+## 빌드
 ```
+# 코어 (서버 + 클라이언트 CLI)
 go build ./...
-go run ./cmd/zwan-server   # http://127.0.0.1:8787/healthz
-go run ./cmd/zwan-agent
+go test ./...
+go run ./cmd/zwan-server --token demo-token-123   # control :8787, relay :3478
+go run ./cmd/zwan-agent  --token demo-token-123 --device pc-1 --name pc1
+#   --up : 어댑터 + WireGuard 터널(관리자)   --relay : 서버 릴레이 경유
+#   --publish-name minecraft --publish-port 25565 --publish-backend-port 31001
+
+# 데스크톱 GUI (Wails v2, gui/ 는 별도 모듈)
+cd gui && wails build     # -> gui/build/bin/gui.exe  (또는 wails dev 로 핫리로드)
 ```
 
 ## 라이선스
