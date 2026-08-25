@@ -29,7 +29,7 @@ independent networks at once**. Open source, no central dependency.
 - 🏠 **Self-hosted** — run your own control server + relay; no third party in the loop.
 - 🔏 **TLS by default** — the control API gets an automatic Let's Encrypt certificate when you have a domain, and a pinned self-signed key when you only have an IP.
 - 🌐 **Works behind NAT** — clients tunnel through your public-IP server's relay when a direct path isn't available.
-- 🧭 **Name-based access** — split-DNS resolver maps `service.<your-suffix>` to the right node.
+- 🧭 **Name-based access** — a split-DNS resolver maps `service.<your-suffix>` to the right node, and Windows is told to send exactly those names to it. `ping nas.home.zwan` works in any program; every other name takes the path it always did.
 - 🚪 **Service addresses** — every published service gets an address of its own, so a name is all a client needs and two services can share a port. TCP and UDP; the real backend stays bound to `127.0.0.1`.
 - 👥 **Group ACLs** — hand each group its own join token and write rules between them; a member never receives the keys of a peer it may not reach.
 - 🔀 **Multi-network client** — join several independent networks at once. Each gets its own adapter, key, UDP port and name space, and nothing routes between them.
@@ -54,6 +54,13 @@ flowchart LR
 The control channel is **TLS**. With a domain the certificate is issued automatically over
 ACME; without one the server keeps a self-signed key and publishes its fingerprint (pin),
 which the client verifies instead of a CA chain — so an IP-only server is authenticated too.
+
+Names are wired into Windows itself. The engine keeps one name-resolution policy rule per
+joined network, so `*.home.zwan` goes to the local resolver while every other name keeps the
+DNS path it always had — your internet is untouched. Rules are removed when you leave a
+network or stop the service, and a run that was killed has its leftovers cleared on the next
+start. Because each device names a network locally, the same service name in two networks
+resolves to two different addresses on the same machine.
 
 The **control plane** (server) only exchanges membership, endpoints, service and DNS
 records. The **data plane** is peer-to-peer WireGuard; when peers can't reach each other
@@ -142,7 +149,8 @@ voice.home.zwan       100.64.128.3:64738   ->  127.0.0.1:31003   (udp)
 
 The real backends stay bound to `127.0.0.1` throughout. Devices are numbered from the
 lower half of the overlay range and services from the upper half, so the two can never
-collide.
+collide. From any other member the name is all there is to it — `minecraft.home.zwan` in the
+game's server field, from any program on the machine.
 
 ## Several networks at once
 
@@ -237,7 +245,8 @@ addresses (TCP + UDP), encrypted tunnel
 L4 service router, desktop app (tray + service + IPC), Windows installer, auto-update.
 Verified end-to-end minus the parts that need Administrator / two machines.
 
-On the roadmap: NAT traversal, IPv6 transport, and code signing.
+On the roadmap: NAT traversal (direct peer-to-peer between two NATs; the relay covers it
+today), IPv6 transport, and code signing.
 
 See [`구현계획.md`](./구현계획.md) (implementation plan) and
 [`MyWAN_가상네트워크_아이디어_정리.md`](./MyWAN_가상네트워크_아이디어_정리.md) (design notes).
