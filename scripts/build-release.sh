@@ -27,15 +27,22 @@ fi
 # running copy holds installer/stage/zwan.exe open. Windows then refuses the
 # copy, and the build stops with an error about a busy device that says nothing
 # about what to close.
-# (Two "IMAGENAME eq" filters would be ANDed and match nothing, so the whole
-# list is taken and filtered here. zwan-server.exe and zwan-service.exe are not
-# matched: the anchored names are exact.)
-if command -v tasklist >/dev/null 2>&1; then
-  RUNNING="$(tasklist //NH 2>/dev/null | grep -iE '^(zwan|gui)\.exe' || true)"
+#
+# Only a copy running FROM THIS TREE holds these files. An installed copy of the
+# app lives elsewhere and is none of this build's business — blocking on it would
+# mean nobody can build a release while using the product.
+if command -v powershell >/dev/null 2>&1; then
+  WINROOT="$(cygpath -w "$ROOT" 2>/dev/null || echo "$ROOT")"
+  RUNNING="$(powershell -NoProfile -NonInteractive -Command \
+    "Get-Process zwan,gui -ErrorAction SilentlyContinue | ForEach-Object { try { \$_.Path } catch {} } | Where-Object { \$_ -like '${WINROOT}*' }" \
+    2>/dev/null | tr -d '\r' | grep . || true)"
   if [ -n "$RUNNING" ]; then
-    echo "ERROR: the desktop app is running and holds the files this build replaces." >&2
-    echo "       Quit it from the tray (closing the window is not enough), or:" >&2
-    echo "         powershell -Command \"Get-Process zwan,gui -EA SilentlyContinue | Stop-Process -Force\"" >&2
+    echo "ERROR: a copy of the app built from this tree is running and holds the files" >&2
+    echo "       this build replaces. Closing its window is not enough — it stays in the" >&2
+    echo "       tray. Running:" >&2
+    echo "$RUNNING" | sed 's/^/         /' >&2
+    echo "       Stop it with:" >&2
+    echo "         powershell -Command \"Get-Process zwan,gui -EA SilentlyContinue | Where-Object { \$_.Path -like '${WINROOT}*' } | Stop-Process -Force\"" >&2
     exit 1
   fi
 fi
