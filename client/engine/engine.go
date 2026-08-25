@@ -25,6 +25,16 @@ import (
 	"github.com/Zeliper/zwan/shared/proto"
 )
 
+// Zone is where an engine publishes its DNS records.
+//
+// The manager hands every engine the same resolver, because a device can only
+// own 127.0.0.1:53 once; a single-network caller can leave it nil and let the
+// engine run a resolver of its own.
+type Zone interface {
+	SetZone(suffix string, recs map[string]net.IP)
+	RemoveZone(suffix string)
+}
+
 // Config controls a single connection.
 type Config struct {
 	Server      string // control server base URL (may carry "#<pin>")
@@ -36,8 +46,15 @@ type Config struct {
 	AdapterName string // default "<Product>-<network>"
 	WGPort      int    // direct-mode UDP listen port (default 51820)
 	Endpoint    string // host:port peers reach us at (default 127.0.0.1:<WGPort>)
-	DNSAddr     string // local resolver address ("" disables it)
+	DNSAddr     string // address for an engine-owned resolver ("" disables it; ignored when DNS is set)
+	DNS         Zone   // shared record sink; when nil the engine may run its own resolver
 	ProductName string // for the default adapter name
+
+	// Alias is the local DNS suffix for this network. Two networks can carry
+	// the same server-side suffix, so the device picks its own short name and
+	// reaches services as <service>.<alias> (design doc 47.1). Empty means use
+	// the suffix the server advertised.
+	Alias string
 
 	// Publish are services this node hosts. The engine keeps them registered:
 	// the control server's registry is in memory, so a server restart drops
@@ -174,14 +191,22 @@ func (e *Engine) Start(cfg Config) error {
 		}
 	}
 
-	var rslv *resolver.Resolver
-	if cfg.DNSAddr != "" {
-		rslv = resolver.New(res.Register.DNSSuffix)
-		if _, err := rslv.Listen(cfg.DNSAddr); err != nil {
+	suffix := strings.ToLower(strings.Trim(strings.TrimSpace(cfg.Alias), "."))
+	if suffix == "" {
+		suffix = res.Register.DNSSuffix
+	}
+
+	// A shared resolver wins; otherwise run one for this network alone.
+	zone := cfg.DNS
+	var owned *resolver.Resolver
+	if zone == nil && cfg.DNSAddr != "" {
+		owned = resolver.New()
+		if _, err := owned.Listen(cfg.DNSAddr); err != nil {
 			log.Printf("engine: dns resolver: %v (continuing)", err)
-			rslv = nil
+			owned = nil
 		} else {
-			go func() { _ = rslv.Serve() }()
+			go func() { _ = owned.Serve() }()
+			zone = owned
 		}
 	}
 
@@ -190,7 +215,7 @@ func (e *Engine) Start(cfg Config) error {
 	e.done = make(chan struct{})
 	e.st = Status{
 		Connected: true, Server: cl.BaseURL(), Pinned: cl.Pin() != "",
-		NetworkID: res.Register.NetworkID, DNSSuffix: res.Register.DNSSuffix,
+		NetworkID: res.Register.NetworkID, DNSSuffix: suffix,
 		OverlayCIDR: res.Register.OverlayCIDR, AssignedIP: res.Register.AssignedIP,
 		RelayAddr: res.Register.RelayAddr, PublicKey: res.PublicKey, Via: via,
 		Handshakes: map[string]bool{},
@@ -199,7 +224,7 @@ func (e *Engine) Start(cfg Config) error {
 	done := e.done
 	e.mu.Unlock()
 
-	go e.run(cl, dev, ad, rslv, res.Register.AssignedIP, res.Register.DNSSuffix, cfg, stop, done)
+	go e.run(cl, dev, ad, zone, owned, res.Register.AssignedIP, suffix, cfg, stop, done)
 	return nil
 }
 
@@ -219,11 +244,16 @@ func (e *Engine) Stop() {
 	e.mu.Unlock()
 }
 
-func (e *Engine) run(cl *join.Client, dev *wg.Device, ad *tun.Adapter, rslv *resolver.Resolver, selfIP, suffix string, cfg Config, stop, done chan struct{}) {
+func (e *Engine) run(cl *join.Client, dev *wg.Device, ad *tun.Adapter, zone Zone, owned *resolver.Resolver, selfIP, suffix string, cfg Config, stop, done chan struct{}) {
 	defer close(done)
 	defer func() {
-		if rslv != nil {
-			_ = rslv.Shutdown()
+		// Drop this network's names first: leaving a network must stop its
+		// names resolving, even when the resolver is shared and keeps running.
+		if zone != nil {
+			zone.RemoveZone(suffix)
+		}
+		if owned != nil {
+			_ = owned.Shutdown()
 		}
 		dev.Close()
 		_ = ad.Close()
@@ -274,7 +304,7 @@ func (e *Engine) run(cl *join.Client, dev *wg.Device, ad *tun.Adapter, rslv *res
 
 		svcs, _ := cl.Services()
 		svcs = republish(cl, cfg.Publish, svcs, selfIP)
-		updateDNS(rslv, suffix, peers, svcs)
+		updateDNS(zone, suffix, peers, svcs)
 		access.Set(peers, svcs)
 		manageHostProxies(hostProxies, selfIP, svcs, access)
 
@@ -346,8 +376,8 @@ func handshakeMap(dev *wg.Device, peers []wg.Peer) map[string]bool {
 	return out
 }
 
-func updateDNS(rslv *resolver.Resolver, suffix string, peers []proto.Peer, svcs []proto.Service) {
-	if rslv == nil {
+func updateDNS(zone Zone, suffix string, peers []proto.Peer, svcs []proto.Service) {
+	if zone == nil {
 		return
 	}
 	recs := map[string]net.IP{}
@@ -364,7 +394,7 @@ func updateDNS(rslv *resolver.Resolver, suffix string, peers []proto.Peer, svcs 
 			recs[strings.ToLower(s.Name)+"."+suffix] = ip
 		}
 	}
-	rslv.SetRecords(recs)
+	zone.SetZone(suffix, recs)
 }
 
 // manageHostProxies starts an L4 proxy for each service hosted on this node.

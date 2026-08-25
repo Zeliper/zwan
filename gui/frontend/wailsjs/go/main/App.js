@@ -10,12 +10,16 @@ export function CheckUpdate() {
   return window['go']['main']['App']['CheckUpdate']();
 }
 
-export function Connect(arg1, arg2, arg3, arg4, arg5) {
-  return window['go']['main']['App']['Connect'](arg1, arg2, arg3, arg4, arg5);
+export function Connect(arg1) {
+  return window['go']['main']['App']['Connect'](arg1);
 }
 
-export function Disconnect() {
-  return window['go']['main']['App']['Disconnect']();
+export function Disconnect(arg1) {
+  return window['go']['main']['App']['Disconnect'](arg1);
+}
+
+export function Forget(arg1) {
+  return window['go']['main']['App']['Forget'](arg1);
 }
 
 export function HostGenToken() {
@@ -34,6 +38,10 @@ export function HostStop() {
   return window['go']['main']['App']['HostStop']();
 }
 
+export function Networks() {
+  return window['go']['main']['App']['Networks']();
+}
+
 export function ParseACL(arg1) {
   return window['go']['main']['App']['ParseACL'](arg1);
 }
@@ -48,10 +56,6 @@ export function ServerServiceUp() {
 
 export function ServiceUp() {
   return window['go']['main']['App']['ServiceUp']();
-}
-
-export function Status() {
-  return window['go']['main']['App']['Status']();
 }
 
 export function Version() {

@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/Microsoft/go-winio"
+
+	"github.com/Zeliper/zwan/client/profile"
 )
 
 // pipeSDDL grants full access to SYSTEM and Administrators, and generic
@@ -41,33 +43,33 @@ func serveConn(conn net.Conn, h Handler) {
 }
 
 func dispatch(h Handler, req Request) Response {
+	var err error
 	switch req.Op {
 	case "connect":
-		if req.Connect == nil {
-			return Response{Error: "missing connect args"}
+		if req.Network == nil {
+			return Response{Error: "missing network"}
 		}
-		if err := h.Connect(*req.Connect); err != nil {
-			return Response{Error: err.Error()}
-		}
-		st := h.Status()
-		return Response{OK: true, Status: &st}
+		err = h.Connect(*req.Network)
 	case "disconnect":
-		if err := h.Disconnect(); err != nil {
-			return Response{Error: err.Error()}
-		}
-		st := h.Status()
-		return Response{OK: true, Status: &st}
+		err = h.Disconnect(req.Alias)
+	case "forget":
+		err = h.Forget(req.Alias)
 	case "status":
-		st := h.Status()
-		return Response{OK: true, Status: &st}
 	default:
 		return Response{Error: "unknown op: " + req.Op}
 	}
+	// The full list goes back either way: a failed connect still changed what
+	// the device knows, and the UI should see that.
+	resp := Response{OK: err == nil, Networks: h.Statuses()}
+	if err != nil {
+		resp.Error = err.Error()
+	}
+	return resp
 }
 
 // Call sends one request to the service and returns its response.
 func Call(req Request) (Response, error) {
-	timeout := 5 * time.Second
+	timeout := 30 * time.Second
 	conn, err := winio.DialPipe(PipeName, &timeout)
 	if err != nil {
 		return Response{}, err
@@ -83,11 +85,16 @@ func Call(req Request) (Response, error) {
 	return resp, nil
 }
 
-// Connect asks the service to join/connect a network.
-func Connect(a ConnectArgs) (Response, error) { return Call(Request{Op: "connect", Connect: &a}) }
+// Connect asks the service to join a network and remember it.
+func Connect(n profile.Network) (Response, error) { return Call(Request{Op: "connect", Network: &n}) }
 
-// Disconnect asks the service to tear the connection down.
-func Disconnect() (Response, error) { return Call(Request{Op: "disconnect"}) }
+// Disconnect asks the service to take one network down, keeping it in the list.
+func Disconnect(alias string) (Response, error) {
+	return Call(Request{Op: "disconnect", Alias: alias})
+}
 
-// Status asks the service for the current connection status.
+// Forget asks the service to remove a network from the device entirely.
+func Forget(alias string) (Response, error) { return Call(Request{Op: "forget", Alias: alias}) }
+
+// Status asks the service for every known network.
 func Status() (Response, error) { return Call(Request{Op: "status"}) }

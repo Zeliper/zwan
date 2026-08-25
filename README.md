@@ -32,7 +32,7 @@ independent networks at once**. Open source, no central dependency.
 - 🧭 **Name-based access** — split-DNS resolver maps `service.<your-suffix>` to the right node.
 - 🚪 **L4 service router** — publish a service and keep the real backend bound to `127.0.0.1` (never exposed on the LAN/internet).
 - 👥 **Group ACLs** — hand each group its own join token and write rules between them; a member never receives the keys of a peer it may not reach.
-- 🔀 **Multi-network client** *(in progress)* — one client, several independent networks, without address/DNS collisions.
+- 🔀 **Multi-network client** — join several independent networks at once. Each gets its own adapter, key, UDP port and name space, and nothing routes between them.
 - 🖥️ **Desktop app** — one tray app for both roles (join a network, host one), with a **system dark/light theme**; SYSTEM services do the work in the background.
 - ⬆️ **Auto-update** — the client updates itself from GitHub releases; the server can self-update too (`--auto-update`).
 
@@ -132,6 +132,27 @@ zwan-agent --server "https://YOUR.PUBLIC.IP:8787#sha256:NMuaxTGRTKlRnx..." --tok
 Other members reach it by name — `minecraft.home.zwan:25565` — while the real backend
 stays bound to `127.0.0.1`.
 
+## Several networks at once
+
+A device can join more than one network, and the pieces that are naturally
+singular are separated on purpose: each network gets its own Wintun adapter, node
+key and UDP port, so nothing is shared that could carry traffic from one into
+another. There is a single DNS resolver, because a machine can only own
+`127.0.0.1:53` once, and each network is a zone inside it.
+
+Names are scoped by a **local name** you choose when joining, not by the suffix
+the server advertises — two servers may well both call themselves `home.zwan`:
+
+```text
+join alice's server, local name "alice"   ->  nas.alice
+join bob's server,   local name "bob"     ->  nas.bob
+```
+
+One caveat until per-network address translation lands: two networks that use the
+same overlay range can hand out the same address, and the host has one routing
+table to put it in. Give each network its own range (`--cidr`) and the client will
+say so if two of them collide.
+
 ## Access control
 
 By default every member reaches every other, which is what a household wants. To
@@ -181,7 +202,7 @@ scripts/build-release.sh 0.1.1   # all release artifacts -> dist/
 ```
 cmd/            zwan-server (control plane + Windows service) · zwan-agent (CLI) · zwan-service (engine service)
 server/         api · ipam · store · relay · host · tlsconf (ACME / self-signed) · config · ipc · supervisor
-client/         engine · tun · wg · wgbind · resolver · l4 · join · ipc · profile · update
+client/         manager · engine · tun · wg · wgbind · resolver · l4 · join · ipc · profile · update
 shared/         proto · keys · certpin (SPKI pinning) · acl (group policy)
 gui/            Wails v2 desktop app + tray (React + Tailwind + shadcn/ui)
 installer/      NSIS installer (app + optional client and server services)
@@ -194,8 +215,9 @@ Working today: control plane over TLS (ACME or pinned self-signed), group ACLs, 
 service + IPC), Windows installer, auto-update. Verified end-to-end minus the parts that
 need Administrator / two machines.
 
-On the roadmap: multi-network client, per-service VIPs with an all-ports transparent
-forwarder (TCP + UDP), NAT traversal, IPv6 transport, and code signing.
+On the roadmap: per-network address translation (so two networks may share an overlay
+range), per-service VIPs with an all-ports transparent forwarder (TCP + UDP), NAT
+traversal, IPv6 transport, and code signing.
 
 See [`구현계획.md`](./구현계획.md) (implementation plan) and
 [`MyWAN_가상네트워크_아이디어_정리.md`](./MyWAN_가상네트워크_아이디어_정리.md) (design notes).

@@ -1,6 +1,6 @@
 //go:build windows
 
-// Command zwan-service is the SYSTEM engine service. It hosts the overlay engine
+// Command zwan-service is the SYSTEM engine service. It runs the overlay engines
 // and serves the user-mode tray/GUI over a named pipe. Run without arguments it
 // behaves as a Windows service (when launched by the SCM); with a subcommand it
 // installs/controls the service (requires Administrator).
@@ -11,8 +11,8 @@ import (
 	"log"
 	"os"
 
-	"github.com/Zeliper/zwan/client/engine"
 	"github.com/Zeliper/zwan/client/ipc"
+	"github.com/Zeliper/zwan/client/manager"
 	"github.com/Zeliper/zwan/client/profile"
 	"github.com/Zeliper/zwan/client/tun"
 	"github.com/Zeliper/zwan/shared"
@@ -26,42 +26,35 @@ const (
 	serviceDesc    = "Runs the zwan private overlay network (virtual adapter, encrypted tunnel, DNS)."
 )
 
-// handler implements ipc.Handler on top of an engine.
-type handler struct{ eng *engine.Engine }
-
-func (h *handler) Connect(a ipc.ConnectArgs) error {
+// newManager builds the supervisor for every network this device has joined.
+//
+// The device identifier is machine-wide: the SYSTEM service registers on behalf
+// of the machine, so the same overlay addresses come back after a restart.
+func newManager() (*manager.Manager, error) {
 	dev, err := profile.MachineDeviceUUID()
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("device identity: %w", err)
 	}
-	h.eng.Stop()
-	return h.eng.Start(engine.Config{
-		Server:      a.Server,
-		Pin:         a.Pin,
-		Token:       a.Token,
-		DeviceUUID:  dev,
-		Name:        a.Name,
-		UseRelay:    a.UseRelay,
+	return manager.New(manager.Config{
 		DNSAddr:     "127.0.0.1:53",
 		ProductName: shared.ProductName,
-	})
+		DeviceUUID:  dev,
+	}), nil
 }
 
-func (h *handler) Disconnect() error     { h.eng.Stop(); return nil }
-func (h *handler) Status() engine.Status { return h.eng.Status() }
-
 // program is the svc.Handler.
-type program struct{ h *handler }
+type program struct{ mgr *manager.Manager }
 
 func (p *program) Execute(_ []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (bool, uint32) {
 	const accepted = svc.AcceptStop | svc.AcceptShutdown
 	changes <- svc.Status{State: svc.StartPending}
 
 	go func() {
-		if err := ipc.Serve(p.h); err != nil {
+		if err := ipc.Serve(p.mgr); err != nil {
 			log.Printf("ipc serve: %v", err)
 		}
 	}()
+	go p.mgr.Start()
 
 	changes <- svc.Status{State: svc.Running, Accepts: accepted}
 	for c := range r {
@@ -70,7 +63,7 @@ func (p *program) Execute(_ []string, r <-chan svc.ChangeRequest, changes chan<-
 			changes <- c.CurrentStatus
 		case svc.Stop, svc.Shutdown:
 			changes <- svc.Status{State: svc.StopPending}
-			p.h.eng.Stop()
+			p.mgr.Stop()
 			return false, 0
 		}
 	}
@@ -78,14 +71,16 @@ func (p *program) Execute(_ []string, r <-chan svc.ChangeRequest, changes chan<-
 }
 
 func main() {
-	h := &handler{eng: engine.New()}
-
 	isSvc, err := svc.IsWindowsService()
 	if err != nil {
 		log.Fatalf("determine service context: %v", err)
 	}
 	if isSvc {
-		_ = svc.Run(serviceName, &program{h})
+		mgr, err := newManager()
+		if err != nil {
+			log.Fatal(err)
+		}
+		_ = svc.Run(serviceName, &program{mgr: mgr})
 		return
 	}
 
@@ -104,7 +99,12 @@ func main() {
 		control("stop")
 	case "run": // foreground, for debugging
 		log.Printf("%s (%s) running in console; Ctrl+C to stop", serviceDisplay, shared.Version)
-		if err := ipc.Serve(h); err != nil {
+		mgr, err := newManager()
+		if err != nil {
+			log.Fatal(err)
+		}
+		go mgr.Start()
+		if err := ipc.Serve(mgr); err != nil {
 			log.Fatal(err)
 		}
 	case "driver-install": // installs the Wintun driver by briefly creating an adapter

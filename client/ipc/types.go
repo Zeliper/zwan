@@ -1,39 +1,38 @@
 // Package ipc is the control channel between the user-mode tray/GUI and the
 // SYSTEM engine service, over a Windows named pipe (JSON request/response).
+//
+// The unit of work is a network, not a connection: a device can be a member of
+// several at once, each identified by the local alias the user gave it.
 package ipc
 
-import "github.com/Zeliper/zwan/client/engine"
+import (
+	"github.com/Zeliper/zwan/client/manager"
+	"github.com/Zeliper/zwan/client/profile"
+)
 
 // PipeName is the named pipe the service listens on.
 const PipeName = `\\.\pipe\zwan-engine`
 
-// ConnectArgs are the fields the UI supplies to join/connect a network. Pin is
-// the control server key fingerprint (empty when the server has a CA-issued
-// certificate); it may also travel inside Server as a "#<pin>" fragment.
-type ConnectArgs struct {
-	Server   string `json:"server"`
-	Pin      string `json:"pin"`
-	Token    string `json:"token"`
-	Name     string `json:"name"`
-	UseRelay bool   `json:"useRelay"`
-}
-
 // Request is one IPC call.
 type Request struct {
-	Op      string       `json:"op"` // "connect" | "disconnect" | "status"
-	Connect *ConnectArgs `json:"connect,omitempty"`
+	Op      string           `json:"op"`                // "status" | "connect" | "disconnect" | "forget"
+	Network *profile.Network `json:"network,omitempty"` // for "connect"
+	Alias   string           `json:"alias,omitempty"`   // for "disconnect" and "forget"
 }
 
-// Response is the reply to a Request.
+// Response is the reply to a Request. Networks is the full list every time, so
+// the UI never has to stitch together a picture from separate calls.
 type Response struct {
-	OK     bool           `json:"ok"`
-	Error  string         `json:"error,omitempty"`
-	Status *engine.Status `json:"status,omitempty"`
+	OK       bool             `json:"ok"`
+	Error    string           `json:"error,omitempty"`
+	Networks []manager.Status `json:"networks,omitempty"`
 }
 
-// Handler is implemented by the service to serve IPC requests.
+// Handler is implemented by the service to serve IPC requests. It is exactly
+// the manager's surface, so the service adds no logic of its own.
 type Handler interface {
-	Connect(ConnectArgs) error
-	Disconnect() error
-	Status() engine.Status
+	Connect(profile.Network) error
+	Disconnect(alias string) error
+	Forget(alias string) error
+	Statuses() []manager.Status
 }

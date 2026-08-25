@@ -2,7 +2,11 @@
 
 package ipc
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/Zeliper/zwan/client/profile"
+)
 
 var errUnsupported = errors.New("ipc: named pipes are Windows-only")
 
@@ -13,10 +17,13 @@ func Serve(h Handler) error { return errUnsupported }
 func Call(req Request) (Response, error) { return Response{}, errUnsupported }
 
 // Connect is unsupported off Windows.
-func Connect(a ConnectArgs) (Response, error) { return Response{}, errUnsupported }
+func Connect(n profile.Network) (Response, error) { return Response{}, errUnsupported }
 
 // Disconnect is unsupported off Windows.
-func Disconnect() (Response, error) { return Response{}, errUnsupported }
+func Disconnect(alias string) (Response, error) { return Response{}, errUnsupported }
+
+// Forget is unsupported off Windows.
+func Forget(alias string) (Response, error) { return Response{}, errUnsupported }
 
 // Status is unsupported off Windows.
 func Status() (Response, error) { return Response{}, errUnsupported }

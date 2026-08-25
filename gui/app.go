@@ -9,8 +9,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/Zeliper/zwan/client/engine"
 	"github.com/Zeliper/zwan/client/ipc"
+	"github.com/Zeliper/zwan/client/manager"
+	"github.com/Zeliper/zwan/client/profile"
 	"github.com/Zeliper/zwan/client/update"
 	serverconfig "github.com/Zeliper/zwan/server/config"
 	serveripc "github.com/Zeliper/zwan/server/ipc"
@@ -44,36 +45,41 @@ func (a *App) ServiceUp() bool {
 	return err == nil
 }
 
-// Connect asks the service to join and bring up a network. pin is the control
-// server's key fingerprint, needed when it has no CA-issued certificate; it may
-// be left empty and pasted inside server as a "#<pin>" fragment instead.
-func (a *App) Connect(server, pin, token, name string, useRelay bool) (*engine.Status, error) {
-	resp, err := ipc.Connect(ipc.ConnectArgs{Server: server, Pin: pin, Token: token, Name: name, UseRelay: useRelay})
-	if err != nil {
-		return nil, err
-	}
-	if !resp.OK {
-		return resp.Status, errors.New(resp.Error)
-	}
-	return resp.Status, nil
-}
-
-// Disconnect tears the current connection down.
-func (a *App) Disconnect() (*engine.Status, error) {
-	resp, err := ipc.Disconnect()
-	if err != nil {
-		return nil, err
-	}
-	return resp.Status, nil
-}
-
-// Status returns the current connection status from the service.
-func (a *App) Status() (*engine.Status, error) {
+// Networks returns every network this device knows, connected or not.
+func (a *App) Networks() ([]manager.Status, error) {
 	resp, err := ipc.Status()
 	if err != nil {
 		return nil, err
 	}
-	return resp.Status, nil
+	return resp.Networks, nil
+}
+
+// Connect joins a network and remembers it. Using an alias that already exists
+// replaces that network's settings, so this is also how one is edited.
+func (a *App) Connect(n profile.Network) ([]manager.Status, error) {
+	return unwrap(ipc.Connect(n))
+}
+
+// Disconnect takes one network down but keeps it in the list.
+func (a *App) Disconnect(alias string) ([]manager.Status, error) {
+	return unwrap(ipc.Disconnect(alias))
+}
+
+// Forget removes a network from this device entirely.
+func (a *App) Forget(alias string) ([]manager.Status, error) {
+	return unwrap(ipc.Forget(alias))
+}
+
+// unwrap turns an IPC reply into a result the frontend can use: the network list
+// comes back even on failure, so the UI can show what actually happened.
+func unwrap(resp ipc.Response, err error) ([]manager.Status, error) {
+	if err != nil {
+		return nil, err
+	}
+	if !resp.OK {
+		return resp.Networks, errors.New(resp.Error)
+	}
+	return resp.Networks, nil
 }
 
 // ---- server (control-server service, or in-process as a fallback) ----
