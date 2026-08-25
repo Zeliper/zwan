@@ -45,6 +45,12 @@ func (a *Adapter) SetNodeIP(ip string) error {
 	return setIPv4(a.Name, ip, 32)
 }
 
+// AddServiceIP gives the adapter an additional address, so a service hosted here
+// is reachable at an address of its own rather than at a port on the node.
+func (a *Adapter) AddServiceIP(ip string) error {
+	return addIPv4(a.Name, ip, 32)
+}
+
 // AddPeerRoute adds a /32 route for a peer's overlay address via this adapter.
 func (a *Adapter) AddPeerRoute(peerIP string) error {
 	return addRoute(a.Name, peerIP)

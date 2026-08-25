@@ -33,6 +33,7 @@ interface Service {
   proto: string
   port: number
   node_ip: string
+  vip?: string
   allow_groups?: string[]
 }
 interface EngineStatus {
@@ -375,7 +376,7 @@ export default function ClientView() {
                           <span className="flex items-center gap-2">
                             {(s.allow_groups?.length ?? 0) > 0 && <Badge variant="muted">{s.allow_groups!.join(', ')}</Badge>}
                             <span className="font-mono text-muted-foreground">
-                              {s.node_ip}:{s.port}/{s.proto}
+                              {s.vip || s.node_ip}:{s.port}/{s.proto}
                             </span>
                           </span>
                         </div>

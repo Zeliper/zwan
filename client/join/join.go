@@ -206,12 +206,14 @@ func (c *Client) Services() ([]proto.Service, error) {
 	return out.Services, nil
 }
 
-// PublishService registers (or updates) a service hosted on this node. Join
-// first: the call is authenticated with the node token.
-func (c *Client) PublishService(svc proto.Service) error {
+// PublishService registers (or updates) a service hosted on this node and
+// returns it as the server stored it, including the address the server gave it.
+// Join first: the call is authenticated with the node token.
+func (c *Client) PublishService(svc proto.Service) (proto.Service, error) {
 	body, _ := json.Marshal(proto.RegisterServiceRequest{Service: svc})
 	var out proto.Service
-	return c.post("/v1/services", body, &out)
+	err := c.post("/v1/services", body, &out)
+	return out, err
 }
 
 func (c *Client) post(path string, body []byte, out any) error {

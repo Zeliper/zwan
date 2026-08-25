@@ -40,10 +40,10 @@ func TestHandshakeLoopback(t *testing.T) {
 	}
 	defer devB.Close()
 
-	if err := devA.SetPeers([]Peer{{PublicKeyHex: privB.Public().Hex(), Endpoint: "127.0.0.1:51821", AllowedIP: "100.64.0.2/32"}}); err != nil {
+	if err := devA.SetPeers([]Peer{{PublicKeyHex: privB.Public().Hex(), Endpoint: "127.0.0.1:51821", AllowedIPs: []string{"100.64.0.2/32"}}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := devB.SetPeers([]Peer{{PublicKeyHex: privA.Public().Hex(), Endpoint: "127.0.0.1:51820", AllowedIP: "100.64.0.1/32"}}); err != nil {
+	if err := devB.SetPeers([]Peer{{PublicKeyHex: privA.Public().Hex(), Endpoint: "127.0.0.1:51820", AllowedIPs: []string{"100.64.0.1/32"}}}); err != nil {
 		t.Fatal(err)
 	}
 

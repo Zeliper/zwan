@@ -59,10 +59,10 @@ func TestRelayHandshake(t *testing.T) {
 	}
 	defer devB.Close()
 
-	if err := devA.SetPeers([]wg.Peer{{PublicKeyHex: privB.Public().Hex(), Endpoint: "100.64.0.2", AllowedIP: "100.64.0.2/32"}}); err != nil {
+	if err := devA.SetPeers([]wg.Peer{{PublicKeyHex: privB.Public().Hex(), Endpoint: "100.64.0.2", AllowedIPs: []string{"100.64.0.2/32"}}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := devB.SetPeers([]wg.Peer{{PublicKeyHex: privA.Public().Hex(), Endpoint: "100.64.0.1", AllowedIP: "100.64.0.1/32"}}); err != nil {
+	if err := devB.SetPeers([]wg.Peer{{PublicKeyHex: privA.Public().Hex(), Endpoint: "100.64.0.1", AllowedIPs: []string{"100.64.0.1/32"}}}); err != nil {
 		t.Fatal(err)
 	}
 

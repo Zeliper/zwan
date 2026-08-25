@@ -20,8 +20,8 @@ import (
 // Peer is one WireGuard peer configuration.
 type Peer struct {
 	PublicKeyHex string
-	Endpoint     string // host:port (may be empty)
-	AllowedIP    string // e.g. 100.64.0.2/32
+	Endpoint     string   // host:port (may be empty)
+	AllowedIPs   []string // the peer's node address, plus any service addresses it hosts
 }
 
 // Device is a running wireguard-go device bound to a virtual adapter.
@@ -99,7 +99,9 @@ func buildPeerConfig(peers []Peer) string {
 		if p.Endpoint != "" {
 			fmt.Fprintf(&b, "endpoint=%s\n", p.Endpoint)
 		}
-		fmt.Fprintf(&b, "allowed_ip=%s\n", p.AllowedIP)
+		for _, ip := range p.AllowedIPs {
+			fmt.Fprintf(&b, "allowed_ip=%s\n", ip)
+		}
 		fmt.Fprintf(&b, "persistent_keepalive_interval=25\n")
 	}
 	return b.String()

@@ -97,6 +97,16 @@ func (t translator) services(in []proto.Service) []proto.Service {
 			continue
 		}
 		s.NodeIP = local
+		if s.VIP != "" {
+			// A service's own address is an overlay address like any other, so
+			// it is translated the same way; without a mapping the service is
+			// simply not offered.
+			vip, ok := t.local(s.VIP)
+			if !ok {
+				continue
+			}
+			s.VIP = vip
+		}
 		out = append(out, s)
 	}
 	return out

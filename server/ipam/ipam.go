@@ -35,6 +35,50 @@ func New(cidr string) (*Allocator, error) {
 	}, nil
 }
 
+// Split divides a network's range in half: the lower half addresses nodes, the
+// upper half addresses services.
+//
+// A service having an address of its own is what lets its name identify it
+// completely (design docs 12, 16 and 38). Two services can then both sit on the
+// port their protocol normally uses, and a client reaches one by name without
+// being told a port at all.
+func Split(cidr string) (nodes, services *Allocator, err error) {
+	p, err := netip.ParsePrefix(cidr)
+	if err != nil {
+		return nil, nil, err
+	}
+	p = p.Masked()
+	if !p.Addr().Is4() {
+		return nil, nil, fmt.Errorf("ipam: %s must be IPv4", p)
+	}
+	if p.Bits() > 28 {
+		return nil, nil, fmt.Errorf("ipam: %s is too small to hold both nodes and services", p)
+	}
+	half := p.Bits() + 1
+	lower := netip.PrefixFrom(p.Addr(), half).Masked()
+
+	step := uint32(1) << uint(32-half)
+	b := p.Addr().As4()
+	base := uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
+	top := base + step
+	upperAddr := netip.AddrFrom4([4]byte{byte(top >> 24), byte(top >> 16), byte(top >> 8), byte(top)})
+	upper := netip.PrefixFrom(upperAddr, half).Masked()
+
+	return newFrom(lower), newFrom(upper), nil
+}
+
+func newFrom(p netip.Prefix) *Allocator {
+	return &Allocator{
+		prefix: p,
+		next:   p.Addr().Next(),
+		byKey:  map[string]netip.Addr{},
+		used:   map[netip.Addr]bool{},
+	}
+}
+
+// Prefix is the range this allocator hands out from.
+func (a *Allocator) Prefix() netip.Prefix { return a.prefix }
+
 // Allocate returns the address for key, assigning a new one on first use.
 func (a *Allocator) Allocate(key string) (netip.Addr, error) {
 	a.mu.Lock()

@@ -62,3 +62,63 @@ func TestExhaustion(t *testing.T) {
 		t.Fatalf("expected 1..3 allocations in /30, got %d", len(seen))
 	}
 }
+
+// Nodes and services come from separate halves, so a service address can never
+// be handed to a device.
+func TestSplitSeparatesNodesFromServices(t *testing.T) {
+	nodes, services, err := Split("100.64.0.0/16")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := nodes.Prefix().String(); got != "100.64.0.0/17" {
+		t.Fatalf("node range = %s", got)
+	}
+	if got := services.Prefix().String(); got != "100.64.128.0/17" {
+		t.Fatalf("service range = %s", got)
+	}
+
+	node, err := nodes.Allocate("device-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc, err := services.Allocate("minecraft")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !nodes.Prefix().Contains(node) || nodes.Prefix().Contains(svc) {
+		t.Fatalf("node %v and service %v are not in their own halves", node, svc)
+	}
+	if !services.Prefix().Contains(svc) {
+		t.Fatalf("service %v is outside the service range", svc)
+	}
+	// Devices still start where they always did, so existing networks see no
+	// change in the addresses they hand out.
+	if node.String() != "100.64.0.1" {
+		t.Fatalf("first device address = %s, want the range to start where it used to", node)
+	}
+}
+
+func TestSplitIsStablePerKey(t *testing.T) {
+	_, services, err := Split("100.64.0.0/16")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, _ := services.Allocate("nas")
+	again, _ := services.Allocate("nas")
+	other, _ := services.Allocate("git")
+	if first != again {
+		t.Fatalf("a name moved: %v then %v", first, again)
+	}
+	if other == first {
+		t.Fatal("two names got the same address")
+	}
+}
+
+func TestSplitRejectsRangesWithNoRoom(t *testing.T) {
+	if _, _, err := Split("100.64.0.0/30"); err == nil {
+		t.Fatal("a range too small to hold both halves should be refused")
+	}
+	if _, _, err := Split("not-a-cidr"); err == nil {
+		t.Fatal("a malformed range should be refused")
+	}
+}

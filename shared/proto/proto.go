@@ -53,6 +53,11 @@ type Service struct {
 	BackendPort int    `json:"backend_port,omitempty"` // localhost-only backend port on the host (0 = none)
 	NodeIP      string `json:"node_ip"`
 
+	// VIP is the service's own overlay address, assigned by the server. It is
+	// what a name resolves to, which is what lets two services share a port and
+	// lets a client reach one without being told a port at all.
+	VIP string `json:"vip,omitempty"`
+
 	// AllowGroups restricts the service to these groups. Empty means every
 	// member who can reach the hosting node may use it.
 	AllowGroups []string `json:"allow_groups,omitempty"`

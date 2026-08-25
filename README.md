@@ -30,7 +30,7 @@ independent networks at once**. Open source, no central dependency.
 - 🔏 **TLS by default** — the control API gets an automatic Let's Encrypt certificate when you have a domain, and a pinned self-signed key when you only have an IP.
 - 🌐 **Works behind NAT** — clients tunnel through your public-IP server's relay when a direct path isn't available.
 - 🧭 **Name-based access** — split-DNS resolver maps `service.<your-suffix>` to the right node.
-- 🚪 **L4 service router** — publish a service and keep the real backend bound to `127.0.0.1` (never exposed on the LAN/internet).
+- 🚪 **Service addresses** — every published service gets an address of its own, so a name is all a client needs and two services can share a port. TCP and UDP; the real backend stays bound to `127.0.0.1`.
 - 👥 **Group ACLs** — hand each group its own join token and write rules between them; a member never receives the keys of a peer it may not reach.
 - 🔀 **Multi-network client** — join several independent networks at once. Each gets its own adapter, key, UDP port and name space, and nothing routes between them.
 - 🖥️ **Desktop app** — one tray app for both roles (join a network, host one), with a **system dark/light theme**; SYSTEM services do the work in the background.
@@ -129,8 +129,20 @@ zwan-agent --server "https://YOUR.PUBLIC.IP:8787#sha256:NMuaxTGRTKlRnx..." --tok
   --publish-name minecraft --publish-port 25565 --publish-backend-port 31001
 ```
 
-Other members reach it by name — `minecraft.home.zwan:25565` — while the real backend
-stays bound to `127.0.0.1`.
+The server gives the service an address of its own, so members reach it by name on the
+port the game already uses — `minecraft.home.zwan`, port 25565 — with nothing to look up.
+A second server on the same machine and the same port is a different address, so it does
+not clash:
+
+```text
+minecraft.home.zwan   100.64.128.1:25565   ->  127.0.0.1:31001
+survival.home.zwan    100.64.128.2:25565   ->  127.0.0.1:31002
+voice.home.zwan       100.64.128.3:64738   ->  127.0.0.1:31003   (udp)
+```
+
+The real backends stay bound to `127.0.0.1` throughout. Devices are numbered from the
+lower half of the overlay range and services from the upper half, so the two can never
+collide.
 
 ## Several networks at once
 
@@ -219,13 +231,14 @@ installer/      NSIS installer (app + optional client and server services)
 
 ## Status & roadmap
 
-Working today: control plane over TLS (ACME or pinned self-signed), group ACLs, encrypted tunnel
+Working today: control plane over TLS (ACME or pinned self-signed), group ACLs, per-service
+addresses (TCP + UDP), encrypted tunnel
 (direct + relay), split-DNS + service registry, L4 service router, desktop app (tray +
 service + IPC), Windows installer, auto-update. Verified end-to-end minus the parts that
 need Administrator / two machines.
 
-On the roadmap: per-service VIPs with an all-ports transparent forwarder (TCP + UDP),
-NAT traversal, IPv6 transport, and code signing.
+On the roadmap: NAT traversal, system DNS integration (NRPT), IPv6 transport, and code
+signing.
 
 See [`구현계획.md`](./구현계획.md) (implementation plan) and
 [`MyWAN_가상네트워크_아이디어_정리.md`](./MyWAN_가상네트워크_아이디어_정리.md) (design notes).

@@ -288,6 +288,7 @@ export namespace proto {
 	    port: number;
 	    backend_port?: number;
 	    node_ip: string;
+	    vip?: string;
 	    allow_groups?: string[];
 	
 	    static createFrom(source: any = {}) {
@@ -301,6 +302,7 @@ export namespace proto {
 	        this.port = source["port"];
 	        this.backend_port = source["backend_port"];
 	        this.node_ip = source["node_ip"];
+	        this.vip = source["vip"];
 	        this.allow_groups = source["allow_groups"];
 	    }
 	}

@@ -294,7 +294,7 @@ func (e *Engine) run(cl *join.Client, dev *wg.Device, ad *tun.Adapter, zone Zone
 	}()
 
 	routed := map[string]bool{}
-	hostProxies := map[string]*l4.TCPProxy{}
+	hostProxies := map[string]*hostedService{}
 	access := &l4.AccessPolicy{}
 	var lastSig string
 	var curPeers []wg.Peer
@@ -308,6 +308,19 @@ func (e *Engine) run(cl *join.Client, dev *wg.Device, ad *tun.Adapter, zone Zone
 			log.Printf("engine: peer refresh: %v", err)
 			return
 		}
+		svcs, _ := cl.Services()
+		svcs = republish(cl, cfg.Publish, svcs, selfIP)
+
+		// A service has an address of its own, and that address lives on the
+		// node hosting it — so the tunnel to that node has to be willing to
+		// carry it, or packets for the service match no peer and go nowhere.
+		hosted := map[string][]string{}
+		for _, sv := range svcs {
+			if sv.VIP != "" {
+				hosted[sv.NodeIP] = append(hosted[sv.NodeIP], sv.VIP)
+			}
+		}
+
 		var wgPeers []wg.Peer
 		for _, p := range peers {
 			if p.AssignedIP == selfIP || p.PublicKey == "" {
@@ -323,7 +336,8 @@ func (e *Engine) run(cl *join.Client, dev *wg.Device, ad *tun.Adapter, zone Zone
 			}
 			// WireGuard is addressed in overlay space; the operating system is
 			// addressed in local space.
-			wgPeers = append(wgPeers, wg.Peer{PublicKeyHex: hexKey, Endpoint: endpoint, AllowedIP: p.AssignedIP + "/32"})
+			allowed := append([]string{p.AssignedIP + "/32"}, cidrs(hosted[p.AssignedIP])...)
+			wgPeers = append(wgPeers, wg.Peer{PublicKeyHex: hexKey, Endpoint: endpoint, AllowedIPs: allowed})
 			local, ok := xlate.local(p.AssignedIP)
 			if !ok {
 				continue
@@ -342,16 +356,14 @@ func (e *Engine) run(cl *join.Client, dev *wg.Device, ad *tun.Adapter, zone Zone
 			lastSig, curPeers = sig, wgPeers
 		}
 
-		svcs, _ := cl.Services()
-		svcs = republish(cl, cfg.Publish, svcs, selfIP)
-
 		// Everything above this line speaks overlay addresses; everything below
 		// speaks the addresses this device actually uses.
 		shownPeers := xlate.peers(peers)
 		shownSvcs := xlate.services(svcs)
+		routeServices(ad, routed, deviceIP, shownSvcs)
 		updateDNS(zone, suffix, shownPeers, shownSvcs)
 		access.Set(shownPeers, shownSvcs)
-		manageHostProxies(hostProxies, deviceIP, shownSvcs, access)
+		manageHostProxies(hostProxies, ad, deviceIP, shownSvcs, access)
 
 		hs := xlate.handshakes(handshakeMap(dev, curPeers))
 		e.mu.Lock()
@@ -389,20 +401,30 @@ func republish(cl *join.Client, want []proto.Service, have []proto.Service, self
 			continue
 		}
 		s.NodeIP = selfIP
-		if err := cl.PublishService(s); err != nil {
+		stored, err := cl.PublishService(s)
+		if err != nil {
 			log.Printf("engine: publish %s: %v", s.Name, err)
 			continue
 		}
-		log.Printf("engine: published service %s on %s:%d/%s", s.Name, selfIP, s.Port, s.Proto)
-		have = append(have, s)
+		log.Printf("engine: published service %s at %s:%d/%s", stored.Name, serviceAddr(stored), stored.Port, stored.Proto)
+		have = append(have, stored)
 	}
 	return have
+}
+
+// serviceAddr is where a service answers: its own address when the server gave
+// it one, and a port on the hosting node otherwise.
+func serviceAddr(s proto.Service) string {
+	if s.VIP != "" {
+		return s.VIP
+	}
+	return s.NodeIP
 }
 
 func peerSig(peers []wg.Peer) string {
 	parts := make([]string, 0, len(peers))
 	for _, p := range peers {
-		parts = append(parts, p.PublicKeyHex+"|"+p.Endpoint+"|"+p.AllowedIP)
+		parts = append(parts, p.PublicKeyHex+"|"+p.Endpoint+"|"+strings.Join(p.AllowedIPs, ","))
 	}
 	sort.Strings(parts)
 	return strings.Join(parts, ",")
@@ -415,7 +437,12 @@ func handshakeMap(dev *wg.Device, peers []wg.Peer) map[string]bool {
 		return out
 	}
 	for _, p := range peers {
-		ip := strings.TrimSuffix(p.AllowedIP, "/32")
+		if len(p.AllowedIPs) == 0 {
+			continue
+		}
+		// The first entry is the peer's own address; the rest are services it
+		// hosts, which share the peer's tunnel state.
+		ip := strings.TrimSuffix(p.AllowedIPs[0], "/32")
 		out[ip] = hs[p.PublicKeyHex] > 0
 	}
 	return out
@@ -435,32 +462,86 @@ func updateDNS(zone Zone, suffix string, peers []proto.Peer, svcs []proto.Servic
 		}
 	}
 	for _, s := range svcs {
-		if ip := net.ParseIP(s.NodeIP); ip != nil {
+		// The service's own address is the point of having one: it is what makes
+		// the name enough, with no port for the user to know or type.
+		target := s.VIP
+		if target == "" {
+			target = s.NodeIP
+		}
+		if ip := net.ParseIP(target); ip != nil {
 			recs[strings.ToLower(s.Name)+"."+suffix] = ip
 		}
 	}
 	zone.SetZone(suffix, recs)
 }
 
-// manageHostProxies starts an L4 proxy for each service hosted on this node.
-// The proxy consults access on every connection, so the service's allow list is
-// enforced here and not only by what the control server chooses to advertise.
-func manageHostProxies(running map[string]*l4.TCPProxy, selfIP string, svcs []proto.Service, access *l4.AccessPolicy) {
+// hostedService is one service this node answers for on the overlay.
+type hostedService struct {
+	tcp *l4.TCPProxy
+	udp *l4.UDPProxy
+}
+
+// cidrs turns addresses into /32 prefixes for a peer's allowed list.
+func cidrs(addrs []string) []string {
+	out := make([]string, 0, len(addrs))
+	for _, a := range addrs {
+		out = append(out, a+"/32")
+	}
+	return out
+}
+
+// routeServices sends each service's address into the tunnel. Services on this
+// node are skipped: their addresses sit on the adapter itself.
+func routeServices(ad *tun.Adapter, routed map[string]bool, selfIP string, svcs []proto.Service) {
 	for _, s := range svcs {
-		if s.NodeIP != selfIP || s.BackendPort == 0 || strings.ToLower(s.Proto) != "tcp" {
+		if s.VIP == "" || s.NodeIP == selfIP || routed[s.VIP] {
+			continue
+		}
+		if err := ad.AddPeerRoute(s.VIP); err == nil {
+			routed[s.VIP] = true
+		}
+	}
+}
+
+// manageHostProxies answers for each service hosted on this node.
+//
+// The service's own address goes on the adapter and the listener binds to it,
+// which is what lets two services here use the same port — and lets a client
+// reach either by name without being told a port. The listener consults access
+// on every connection, so the allow list is enforced here too and not only by
+// what the control server chooses to advertise.
+func manageHostProxies(running map[string]*hostedService, ad *tun.Adapter, selfIP string, svcs []proto.Service, access *l4.AccessPolicy) {
+	for _, s := range svcs {
+		if s.NodeIP != selfIP || s.BackendPort == 0 {
 			continue
 		}
 		if _, ok := running[s.Name]; ok {
 			continue
 		}
-		listen := fmt.Sprintf("%s:%d", selfIP, s.Port)
-		backend := fmt.Sprintf("127.0.0.1:%d", s.BackendPort)
-		p, err := l4.ListenTCP(listen, backend, access.Filter(s.Name))
-		if err != nil {
-			log.Printf("engine: service %s proxy on %s: %v", s.Name, listen, err)
+		// Without an address of its own — an older server — the service falls
+		// back to a port on this node, as it always was.
+		addr := s.VIP
+		if addr == "" {
+			addr = selfIP
+		} else if err := ad.AddServiceIP(addr); err != nil {
+			log.Printf("engine: service %s address %s: %v", s.Name, addr, err)
 			continue
 		}
-		running[s.Name] = p
-		log.Printf("engine: serving %s on %s -> %s", s.Name, listen, backend)
+		listen := fmt.Sprintf("%s:%d", addr, s.Port)
+		backend := fmt.Sprintf("127.0.0.1:%d", s.BackendPort)
+
+		hosted := &hostedService{}
+		var err error
+		if strings.EqualFold(s.Proto, "udp") {
+			hosted.udp, err = l4.ListenUDP(listen, backend, access.Filter(s.Name))
+		} else {
+			hosted.tcp, err = l4.ListenTCP(listen, backend, access.Filter(s.Name))
+		}
+		if err != nil {
+			log.Printf("engine: service %s on %s: %v", s.Name, listen, err)
+			continue
+		}
+		running[s.Name] = hosted
+		log.Printf("engine: serving %s on %s/%s -> %s", s.Name, listen, strings.ToLower(s.Proto), backend)
 	}
 }

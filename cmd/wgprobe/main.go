@@ -77,7 +77,7 @@ func main() {
 	if err := dev.SetPeers([]wg.Peer{{
 		PublicKeyHex: peerPubHex,
 		Endpoint:     endpoint,
-		AllowedIP:    peerIP + "/32",
+		AllowedIPs:   []string{peerIP + "/32"},
 	}}); err != nil {
 		log.Fatalf("set peers: %v", err)
 	}

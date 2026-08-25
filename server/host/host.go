@@ -99,7 +99,7 @@ func (h *Host) Start(cfg Config) error {
 		return err
 	}
 
-	alloc, err := ipam.New(cfg.CIDR)
+	nodes, services, err := ipam.Split(cfg.CIDR)
 	if err != nil {
 		return err
 	}
@@ -108,7 +108,10 @@ func (h *Host) Start(cfg Config) error {
 		return err
 	}
 	nw := store.NewNetwork(cfg.NetworkID, cfg.DNSSuffix, cfg.CIDR)
-	srv := api.New(nw, alloc, tokens, &acl.Policy{Rules: cfg.ACL}, relayPub)
+	srv := api.New(api.Options{
+		Network: nw, Nodes: nodes, Services: services,
+		Tokens: tokens, Policy: &acl.Policy{Rules: cfg.ACL}, RelayAddr: relayPub,
+	})
 
 	rly := relay.New()
 	if _, err := rly.Listen(cfg.RelayAddr); err != nil {

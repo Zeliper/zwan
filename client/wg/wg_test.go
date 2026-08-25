@@ -7,8 +7,8 @@ import (
 
 func TestBuildPeerConfig(t *testing.T) {
 	cfg := buildPeerConfig([]Peer{
-		{PublicKeyHex: "aa", Endpoint: "127.0.0.1:51821", AllowedIP: "100.64.0.2/32"},
-		{PublicKeyHex: "bb", AllowedIP: "100.64.0.3/32"}, // no endpoint
+		{PublicKeyHex: "aa", Endpoint: "127.0.0.1:51821", AllowedIPs: []string{"100.64.0.2/32"}},
+		{PublicKeyHex: "bb", AllowedIPs: []string{"100.64.0.3/32"}}, // no endpoint
 	})
 
 	if !strings.HasPrefix(cfg, "replace_peers=true\n") {
@@ -24,5 +24,34 @@ func TestBuildPeerConfig(t *testing.T) {
 	}
 	if strings.Contains(cfg, "endpoint=\n") {
 		t.Errorf("empty endpoint should be omitted:\n%s", cfg)
+	}
+}
+
+// A peer carries the addresses of the services it hosts alongside its own, so
+// packets for a service match the tunnel to the node serving it.
+func TestBuildPeerConfigCarriesServiceAddresses(t *testing.T) {
+	cfg := buildPeerConfig([]Peer{{
+		PublicKeyHex: "aa",
+		AllowedIPs:   []string{"100.64.0.2/32", "100.64.128.1/32", "100.64.128.2/32"},
+	}})
+
+	for _, want := range []string{
+		"allowed_ip=100.64.0.2/32", "allowed_ip=100.64.128.1/32", "allowed_ip=100.64.128.2/32",
+	} {
+		if !strings.Contains(cfg, want) {
+			t.Errorf("config missing %q:\n%s", want, cfg)
+		}
+	}
+	if n := strings.Count(cfg, "public_key="); n != 1 {
+		t.Errorf("the addresses belong to one peer, got %d peers:\n%s", n, cfg)
+	}
+}
+
+// A peer with no addresses would match nothing; it should not be written out as
+// a peer that silently drops everything.
+func TestBuildPeerConfigHandlesAPeerWithNoAddresses(t *testing.T) {
+	cfg := buildPeerConfig([]Peer{{PublicKeyHex: "aa"}})
+	if strings.Contains(cfg, "allowed_ip=") {
+		t.Errorf("no addresses should mean no allowed_ip lines:\n%s", cfg)
 	}
 }

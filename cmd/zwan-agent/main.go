@@ -111,11 +111,16 @@ func main() {
 
 	for _, svc := range publish {
 		svc.NodeIP = res.Register.AssignedIP
-		if err := cl.PublishService(svc); err != nil {
+		stored, err := cl.PublishService(svc)
+		if err != nil {
 			log.Fatalf("publish service: %v", err)
 		}
-		log.Printf("published service %s.%s -> %s:%d/%s (backend 127.0.0.1:%d, allowed: %s)",
-			svc.Name, res.Register.DNSSuffix, svc.NodeIP, svc.Port, svc.Proto, svc.BackendPort, allowLabel(svc.AllowGroups))
+		addr := stored.VIP
+		if addr == "" {
+			addr = stored.NodeIP
+		}
+		log.Printf("published service %s.%s at %s:%d/%s (backend 127.0.0.1:%d, allowed: %s)",
+			stored.Name, res.Register.DNSSuffix, addr, stored.Port, stored.Proto, stored.BackendPort, allowLabel(stored.AllowGroups))
 	}
 
 	if *useTun {

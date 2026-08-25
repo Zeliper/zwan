@@ -34,6 +34,7 @@ type Service struct {
 	Port        int
 	BackendPort int
 	NodeIP      string
+	VIP         string
 	AllowGroups []string
 }
 

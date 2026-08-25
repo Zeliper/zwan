@@ -36,26 +36,41 @@ import (
 	"github.com/Zeliper/zwan/shared/proto"
 )
 
-// Server wires a single network's store and allocator behind the HTTP API.
+// Options configures an API server for one network.
+type Options struct {
+	Network *store.Network
+	// Nodes and Services address devices and services from separate halves of
+	// the network's range.
+	Nodes    *ipam.Allocator
+	Services *ipam.Allocator
+	// Tokens maps each join token to the group its holder joins into; Policy may
+	// be nil or empty, which lets every member reach every other.
+	Tokens acl.JoinTokens
+	Policy *acl.Policy
+	// RelayAddr is the public host:port of the server relay, advertised to
+	// clients. Empty disables relay advertisement.
+	RelayAddr string
+}
+
+// Server wires a single network's store and allocators behind the HTTP API.
 type Server struct {
-	net       *store.Network
-	ipam      *ipam.Allocator
-	tokens    acl.JoinTokens
-	policy    *acl.Policy
-	relayAddr string // host:port of the server relay advertised to clients
+	net        *store.Network
+	nodeIPs    *ipam.Allocator
+	serviceIPs *ipam.Allocator
+	tokens     acl.JoinTokens
+	policy     *acl.Policy
+	relayAddr  string
 }
 
 // New builds an API server for one network.
-//
-// tokens maps each join token to the group its holder joins into; policy may be
-// nil or empty, which lets every member reach every other. relayAddr is the
-// public host:port of the server relay (may be empty to disable relay
-// advertisement).
-func New(net *store.Network, alloc *ipam.Allocator, tokens acl.JoinTokens, policy *acl.Policy, relayAddr string) *Server {
-	if tokens == nil {
-		tokens = acl.JoinTokens{}
+func New(o Options) *Server {
+	if o.Tokens == nil {
+		o.Tokens = acl.JoinTokens{}
 	}
-	return &Server{net: net, ipam: alloc, tokens: tokens, policy: policy, relayAddr: relayAddr}
+	return &Server{
+		net: o.Network, nodeIPs: o.Nodes, serviceIPs: o.Services,
+		tokens: o.Tokens, policy: o.Policy, relayAddr: o.RelayAddr,
+	}
 }
 
 // Routes returns the HTTP handler.
@@ -96,7 +111,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "device_uuid and public_key are required")
 		return
 	}
-	ip, err := s.ipam.Allocate(req.DeviceUUID)
+	ip, err := s.nodeIPs.Allocate(req.DeviceUUID)
 	if err != nil {
 		writeErr(w, http.StatusServiceUnavailable, err.Error())
 		return
@@ -182,7 +197,7 @@ func (s *Server) services(w http.ResponseWriter, r *http.Request) {
 			}
 			resp.Services = append(resp.Services, proto.Service{
 				Name: sv.Name, Proto: sv.Proto, Port: sv.Port, BackendPort: sv.BackendPort,
-				NodeIP: sv.NodeIP, AllowGroups: sv.AllowGroups,
+				NodeIP: sv.NodeIP, VIP: sv.VIP, AllowGroups: sv.AllowGroups,
 			})
 		}
 		sort.Slice(resp.Services, func(i, j int) bool { return resp.Services[i].Name < resp.Services[j].Name })
@@ -214,15 +229,24 @@ func (s *Server) services(w http.ResponseWriter, r *http.Request) {
 		if protocol == "" {
 			protocol = "tcp"
 		}
+		// The address is keyed by name, so re-publishing a service — after a
+		// restart, or from a different node — keeps the address its clients
+		// already resolved.
+		vip, err := s.serviceIPs.Allocate(req.Name)
+		if err != nil {
+			writeErr(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
 		allow := cleanGroups(req.AllowGroups)
+		svc := proto.Service{
+			Name: req.Name, Proto: protocol, Port: req.Port, BackendPort: req.BackendPort,
+			NodeIP: req.NodeIP, VIP: vip.String(), AllowGroups: allow,
+		}
 		s.net.UpsertService(&store.Service{
-			Name: req.Name, Proto: protocol, Port: req.Port, BackendPort: req.BackendPort,
-			NodeIP: req.NodeIP, AllowGroups: allow,
+			Name: svc.Name, Proto: svc.Proto, Port: svc.Port, BackendPort: svc.BackendPort,
+			NodeIP: svc.NodeIP, VIP: svc.VIP, AllowGroups: svc.AllowGroups,
 		})
-		writeJSON(w, http.StatusOK, proto.Service{
-			Name: req.Name, Proto: protocol, Port: req.Port, BackendPort: req.BackendPort,
-			NodeIP: req.NodeIP, AllowGroups: allow,
-		})
+		writeJSON(w, http.StatusOK, svc)
 
 	default:
 		writeErr(w, http.StatusMethodNotAllowed, "GET or POST only")

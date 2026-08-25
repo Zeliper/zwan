@@ -22,12 +22,15 @@ func newTestServer(t *testing.T) *httptest.Server {
 // access policy.
 func newTestServerWith(t *testing.T, tokens acl.JoinTokens, policy *acl.Policy) *httptest.Server {
 	t.Helper()
-	alloc, err := ipam.New("100.64.0.0/16")
+	nodes, services, err := ipam.Split("100.64.0.0/16")
 	if err != nil {
 		t.Fatal(err)
 	}
 	nw := store.NewNetwork("demo", "demo.zwan", "100.64.0.0/16")
-	ts := httptest.NewServer(New(nw, alloc, tokens, policy, "127.0.0.1:3478").Routes())
+	ts := httptest.NewServer(New(Options{
+		Network: nw, Nodes: nodes, Services: services,
+		Tokens: tokens, Policy: policy, RelayAddr: "127.0.0.1:3478",
+	}).Routes())
 	t.Cleanup(ts.Close)
 	return ts
 }
@@ -428,4 +431,68 @@ func TestServiceAllowListIsStoredAndReturned(t *testing.T) {
 	if len(out.AllowGroups) != 1 || out.AllowGroups[0] != "dev" {
 		t.Fatalf("allow list = %v, want the blanks dropped", out.AllowGroups)
 	}
+}
+
+// A service gets an address of its own, so its name identifies it completely and
+// two services may sit on the same port.
+func TestServicesGetTheirOwnAddress(t *testing.T) {
+	ts := newTestServer(t)
+	_, me := register(t, ts.URL, proto.RegisterRequest{Token: "secret", DeviceUUID: "d1", PublicKey: "k1"})
+
+	first := publishAndRead(t, ts.URL, me.NodeToken, proto.Service{Name: "minecraft", Port: 25565})
+	second := publishAndRead(t, ts.URL, me.NodeToken, proto.Service{Name: "valheim", Port: 25565})
+
+	if first.VIP == "" || second.VIP == "" {
+		t.Fatalf("services must get addresses: %+v %+v", first, second)
+	}
+	if first.VIP == second.VIP {
+		t.Fatalf("two services shared the address %s", first.VIP)
+	}
+	if first.Port != second.Port {
+		t.Fatal("this test is about two services on the same port")
+	}
+	// The address must not collide with the addresses handed to devices.
+	if first.VIP == me.AssignedIP || second.VIP == me.AssignedIP {
+		t.Fatal("a service was given a device's address")
+	}
+}
+
+// Re-publishing keeps the address, so a name a client already resolved keeps
+// pointing at the same place across a restart or a move to another node.
+func TestServiceAddressIsStableAcrossRepublish(t *testing.T) {
+	ts := newTestServer(t)
+	_, me := register(t, ts.URL, proto.RegisterRequest{Token: "secret", DeviceUUID: "d1", PublicKey: "k1"})
+
+	first := publishAndRead(t, ts.URL, me.NodeToken, proto.Service{Name: "nas", Port: 445})
+	again := publishAndRead(t, ts.URL, me.NodeToken, proto.Service{Name: "nas", Port: 445, BackendPort: 4450})
+	if first.VIP != again.VIP {
+		t.Fatalf("address moved on re-publish: %s -> %s", first.VIP, again.VIP)
+	}
+}
+
+func TestServiceAddressIsListed(t *testing.T) {
+	ts := newTestServer(t)
+	_, me := register(t, ts.URL, proto.RegisterRequest{Token: "secret", DeviceUUID: "d1", PublicKey: "k1"})
+	want := publishAndRead(t, ts.URL, me.NodeToken, proto.Service{Name: "nas", Port: 445})
+
+	code, body := do(t, http.MethodGet, ts.URL+"/v1/services", me.NodeToken, nil)
+	if code != http.StatusOK {
+		t.Fatalf("list: %d", code)
+	}
+	var sr proto.ServicesResponse
+	_ = json.Unmarshal(body, &sr)
+	if len(sr.Services) != 1 || sr.Services[0].VIP != want.VIP {
+		t.Fatalf("listed services = %+v, want the address included", sr.Services)
+	}
+}
+
+func publishAndRead(t *testing.T, base, nodeToken string, svc proto.Service) proto.Service {
+	t.Helper()
+	code, body := do(t, http.MethodPost, base+"/v1/services", nodeToken, proto.RegisterServiceRequest{Service: svc})
+	if code != http.StatusOK {
+		t.Fatalf("publish %s: %d (%s)", svc.Name, code, body)
+	}
+	var out proto.Service
+	_ = json.Unmarshal(body, &out)
+	return out
 }

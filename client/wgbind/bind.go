@@ -233,9 +233,9 @@ func (b *Bind) BatchSize() int { return 1 }
 // relayEndpoint identifies a peer by its overlay IP for relay routing.
 type relayEndpoint struct{ ip netip.Addr }
 
-func (e *relayEndpoint) ClearSrc()             {}
-func (e *relayEndpoint) SrcToString() string   { return "" }
-func (e *relayEndpoint) DstToString() string   { return e.ip.String() }
-func (e *relayEndpoint) DstToBytes() []byte    { b := e.ip.As4(); return b[:] }
-func (e *relayEndpoint) DstIP() netip.Addr     { return e.ip }
-func (e *relayEndpoint) SrcIP() netip.Addr     { return netip.Addr{} }
+func (e *relayEndpoint) ClearSrc()           {}
+func (e *relayEndpoint) SrcToString() string { return "" }
+func (e *relayEndpoint) DstToString() string { return e.ip.String() }
+func (e *relayEndpoint) DstToBytes() []byte  { b := e.ip.As4(); return b[:] }
+func (e *relayEndpoint) DstIP() netip.Addr   { return e.ip }
+func (e *relayEndpoint) SrcIP() netip.Addr   { return netip.Addr{} }
