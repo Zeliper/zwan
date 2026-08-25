@@ -254,12 +254,29 @@ func (h *Host) JoinURL(publicHost string) string {
 		} else {
 			hostport = localAddr(h.ctrlAddr)
 		}
+	} else {
+		// An operator who types only a host means "reach me here", not "reach me
+		// on 443". Without the port the address still looks right and still
+		// parses, and the client quietly connects to whatever else answers on
+		// 443 — which is a confusing way to find out, because what it reports is
+		// a key that does not match the pin.
+		hostport = ensurePort(hostport, h.ctrlAddr)
 	}
 	u := h.Scheme() + "://" + hostport
 	if h.tlsRes.Pin != "" {
 		u += "#" + url.PathEscape(h.tlsRes.Pin)
 	}
 	return u
+}
+
+// ensurePort leaves an address that already names a port alone, and gives the
+// listening port to one that does not. An unbracketed IPv6 literal has no port
+// by definition, and comes back bracketed.
+func ensurePort(hostport, listenAddr string) string {
+	if _, _, err := net.SplitHostPort(hostport); err == nil {
+		return hostport
+	}
+	return withPort(hostport, listenAddr)
 }
 
 // withPort attaches the port from listenAddr to a bare hostname.

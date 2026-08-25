@@ -1,7 +1,9 @@
 package host
 
 import (
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -91,6 +93,39 @@ func TestJoinURLCarriesThePin(t *testing.T) {
 
 	if got := h.JoinURL("vpn.example.test:8787"); !strings.HasPrefix(got, "https://vpn.example.test:8787#") {
 		t.Fatalf("join URL with an explicit public host = %q", got)
+	}
+}
+
+// A public address without a port has to pick up the port the server listens on.
+//
+// Left alone it becomes an address the client can still parse and still reach —
+// on 443, where whatever else is published on that address answers. The pin then
+// fails against a stranger's key, which reads as "the pin is wrong" rather than
+// "the port is missing" and sends the operator looking in the wrong place.
+func TestJoinURLGivesAPortlessPublicAddressTheListeningPort(t *testing.T) {
+	h := startTestHost(t, Config{})
+
+	local, err := url.Parse(h.LocalURL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := local.Port()
+	want := "https://" + net.JoinHostPort("203.0.113.5", port) + "#"
+	if got := h.JoinURL("203.0.113.5"); !strings.HasPrefix(got, want) {
+		t.Errorf("JoinURL(%q) = %q, want it to start with %q", "203.0.113.5", got, want)
+	}
+
+	// One that already names a port is the operator's business, port 443
+	// included: they may be behind something that forwards it.
+	for _, given := range []string{"203.0.113.5:9999", "vpn.example.test:443", "[2001:db8::1]:8787"} {
+		if got := h.JoinURL(given); !strings.HasPrefix(got, "https://"+given+"#") {
+			t.Errorf("JoinURL(%q) = %q, want it left alone", given, got)
+		}
+	}
+
+	// An unbracketed IPv6 literal names no port, and has to come back usable.
+	if got := h.JoinURL("2001:db8::1"); !strings.HasPrefix(got, "https://[2001:db8::1]:"+port+"#") {
+		t.Errorf("JoinURL of a bare IPv6 address = %q", got)
 	}
 }
 
