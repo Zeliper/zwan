@@ -35,4 +35,6 @@ export function ServerServiceUp():Promise<boolean>;
 
 export function ServiceUp():Promise<boolean>;
 
+export function SetLanguage(arg1:string):Promise<void>;
+
 export function Version():Promise<string>;

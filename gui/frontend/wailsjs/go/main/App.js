@@ -58,6 +58,10 @@ export function ServiceUp() {
   return window['go']['main']['App']['ServiceUp']();
 }
 
+export function SetLanguage(arg1) {
+  return window['go']['main']['App']['SetLanguage'](arg1);
+}
+
 export function Version() {
   return window['go']['main']['App']['Version']();
 }

@@ -31,9 +31,9 @@ func startTray(app *App, icon []byte) {
 			systray.SetIcon(icon)
 		}
 		systray.SetTitle("zwan")
-		systray.SetTooltip("zwan overlay network")
+		systray.SetTooltip(text().tooltip)
 
-		mShow := systray.AddMenuItem("Show", "Show the zwan window")
+		mShow := systray.AddMenuItem(text().show, text().showTip)
 		systray.AddSeparator()
 
 		slots := &networkSlots{app: app}
@@ -45,9 +45,21 @@ func startTray(app *App, icon []byte) {
 		}
 
 		systray.AddSeparator()
-		mStopHost := systray.AddMenuItem("Stop hosting", "Stop the network this machine hosts")
+		mStopHost := systray.AddMenuItem(text().stopHosting, text().stopHostTip)
 		systray.AddSeparator()
-		mQuit := systray.AddMenuItem("Quit", "Quit zwan")
+		mQuit := systray.AddMenuItem(text().quit, text().quitTip)
+
+		// The fixed items are titled once at build time, so switching language
+		// has to come back and retitle them. The network slots are rewritten on
+		// every tick anyway and need no hook.
+		onLanguageChange(func() {
+			mShow.SetTitle(text().show)
+			mShow.SetTooltip(text().showTip)
+			mStopHost.SetTitle(text().stopHosting)
+			mStopHost.SetTooltip(text().stopHostTip)
+			mQuit.SetTitle(text().quit)
+			mQuit.SetTooltip(text().quitTip)
+		})
 
 		go trackState(app, slots, mStopHost)
 
@@ -113,11 +125,12 @@ func (s *networkSlots) set(list []manager.Status) {
 			continue
 		}
 		st := list[i]
-		state := "disconnected"
+		state := text().disconnected
 		if st.Engine.Connected {
+			// The address says more than the word does, when there is one.
 			state = st.Engine.AssignedIP
 			if state == "" {
-				state = "connected"
+				state = text().connected
 			}
 		}
 		item.SetTitle(fmt.Sprintf("%s — %s", st.Network.Alias, state))
@@ -133,9 +146,9 @@ func (s *networkSlots) set(list []manager.Status) {
 
 func clickHint(st manager.Status) string {
 	if st.Engine.Connected {
-		return "Leave " + st.Network.Alias
+		return text().leave + st.Network.Alias
 	}
-	return "Join " + st.Network.Alias
+	return text().join + st.Network.Alias
 }
 
 // trackState keeps the tooltip and the menu in step with what is actually
@@ -159,7 +172,7 @@ func trackState(app *App, slots *networkSlots, stopHost *systray.MenuItem) {
 
 		hosting := ""
 		if st := app.HostStatus(); st != nil && st.Running {
-			hosting = "hosting " + st.Config.NetworkID
+			hosting = text().hostingPrefix + st.Config.NetworkID
 			stopHost.Enable()
 		} else {
 			stopHost.Disable()
@@ -172,13 +185,13 @@ func trackState(app *App, slots *networkSlots, stopHost *systray.MenuItem) {
 func tooltip(joined []string, hosting string) string {
 	var parts []string
 	if len(joined) > 0 {
-		parts = append(parts, "joined "+strings.Join(joined, ", "))
+		parts = append(parts, text().joinedPrefix+strings.Join(joined, ", "))
 	}
 	if hosting != "" {
 		parts = append(parts, hosting)
 	}
 	if len(parts) == 0 {
-		return "zwan — idle"
+		return text().idle
 	}
 	return "zwan — " + strings.Join(parts, "; ")
 }

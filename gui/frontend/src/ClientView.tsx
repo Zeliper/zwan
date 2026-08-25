@@ -20,6 +20,8 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Connect, Disconnect, Forget, Networks, ServiceUp } from '../wailsjs/go/main/App'
+import type { Key } from '@/lib/i18n'
+import { Mono, useT } from '@/lib/use-i18n'
 
 interface Peer {
   hostname: string
@@ -72,11 +74,13 @@ interface NetworkStatus {
 const blank: NetworkProfile = { alias: '', server: 'https://127.0.0.1:8787', pin: '', token: '', name: '', useRelay: true, autoConnect: true }
 
 // trustOf describes how a control server's identity was verified, mirroring the
-// server's own three modes: ACME certificate, pinned key, or no TLS at all.
-function trustOf(s: EngineStatus): { ok: boolean; label: string } {
-  if (s.server?.startsWith('http://')) return { ok: false, label: 'plaintext — not authenticated' }
-  if (s.pinned) return { ok: true, label: 'TLS · pinned key' }
-  return { ok: true, label: 'TLS · CA certificate' }
+// server's own three modes: ACME certificate, pinned key, or no TLS at all. It
+// names the wording rather than choosing it, so the sentence is picked in the
+// language the component is being rendered in.
+function trustOf(s: EngineStatus): { ok: boolean; label: Key } {
+  if (s.server?.startsWith('http://')) return { ok: false, label: 'client.trust.plaintext' }
+  if (s.pinned) return { ok: true, label: 'client.trust.pinned' }
+  return { ok: true, label: 'client.trust.ca' }
 }
 
 function Row({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
@@ -89,6 +93,7 @@ function Row({ label, value, mono }: { label: string; value: string; mono?: bool
 }
 
 export default function ClientView() {
+  const { t, tx } = useT()
   const [nets, setNets] = useState<NetworkStatus[]>([])
   const [serviceUp, setServiceUp] = useState(true)
   const [adding, setAdding] = useState(false)
@@ -157,12 +162,12 @@ export default function ClientView() {
   const addForm = (
     <Card className="mx-auto max-w-md">
       <CardHeader>
-        <CardTitle>Join a network</CardTitle>
-        <CardDescription>Paste the join address the host gave you, with your token.</CardDescription>
+        <CardTitle>{t('client.add.title')}</CardTitle>
+        <CardDescription>{t('client.add.description')}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="space-y-1.5">
-          <Label htmlFor="alias">Local name</Label>
+          <Label htmlFor="alias">{t('client.alias')}</Label>
           <Input
             id="alias"
             value={draft.alias}
@@ -171,38 +176,37 @@ export default function ClientView() {
             className="font-mono"
           />
           <p className="text-xs text-muted-foreground">
-            Your own short name for this network. Services live under it — <span className="font-mono">nas.alice</span> — so it keeps two
-            networks apart even when both servers use the same suffix.
+            {tx('client.alias.help', { example: <Mono>nas.alice</Mono> })}
           </p>
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor="server">Server</Label>
+          <Label htmlFor="server">{t('client.server')}</Label>
           <Input id="server" value={draft.server} onChange={(e) => onServerInput(e.target.value)} placeholder="https://host:8787" />
           {draft.server.startsWith('http://') && (
-            <p className="text-xs text-destructive">Plain http: the token and control traffic are sent unencrypted.</p>
+            <p className="text-xs text-destructive">{t('client.server.insecure')}</p>
           )}
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor="pin">Server key pin</Label>
+          <Label htmlFor="pin">{t('client.pin')}</Label>
           <Input
             id="pin"
             value={draft.pin ?? ''}
             onChange={(e) => setDraft({ ...draft, pin: e.target.value })}
-            placeholder="sha256:… (leave empty for a public domain)"
+            placeholder={t('client.pin.placeholder')}
           />
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor="token">Token</Label>
+          <Label htmlFor="token">{t('client.token')}</Label>
           <Input
             id="token"
             type="password"
             value={draft.token}
             onChange={(e) => setDraft({ ...draft, token: e.target.value })}
-            placeholder="join token"
+            placeholder={t('client.token.placeholder')}
           />
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor="name">This device's name (optional)</Label>
+          <Label htmlFor="name">{t('client.deviceName')}</Label>
           <Input id="name" value={draft.name ?? ''} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
         </div>
         <label className="flex items-center gap-2 text-sm">
@@ -212,17 +216,17 @@ export default function ClientView() {
             onChange={(e) => setDraft({ ...draft, useRelay: e.target.checked })}
             className="h-4 w-4 accent-primary"
           />
-          Route via server relay (works behind NAT)
+          {t('client.useRelay')}
         </label>
         {error && <p className="text-sm text-destructive">{error}</p>}
         <div className="flex gap-2">
           <Button className="flex-1" onClick={addNetwork} disabled={busy === 'add' || !draft.token || !draft.alias || !serviceUp}>
             {busy === 'add' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Radio className="h-4 w-4" />}
-            {busy === 'add' ? 'Joining…' : 'Join'}
+            {busy === 'add' ? t('client.joining') : t('client.join')}
           </Button>
           {nets.length > 0 && (
             <Button variant="outline" onClick={() => setAdding(false)}>
-              Cancel
+              {t('common.cancel')}
             </Button>
           )}
         </div>
@@ -235,10 +239,7 @@ export default function ClientView() {
       {!serviceUp && (
         <div className="mb-4 flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-          <div>
-            Engine service is not running. Install it (the installer does this), or run
-            <span className="mx-1 font-mono">zwan-service install</span> as Administrator.
-          </div>
+          <div>{tx('client.serviceDown', { command: <Mono>zwan-service install</Mono> })}</div>
         </div>
       )}
 
@@ -248,13 +249,16 @@ export default function ClientView() {
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-lg font-semibold">Networks</h1>
+              <h1 className="text-lg font-semibold">{t('client.networks')}</h1>
               <p className="text-sm text-muted-foreground">
-                {nets.filter((n) => n.engine.connected).length} of {nets.length} connected
+                {t('client.connectedCount', {
+                  connected: nets.filter((n) => n.engine.connected).length,
+                  total: nets.length,
+                })}
               </p>
             </div>
             <Button variant="outline" size="sm" onClick={() => setAdding(true)}>
-              <Plus className="h-4 w-4" /> Join another
+              <Plus className="h-4 w-4" /> {t('client.joinAnother')}
             </Button>
           </div>
 
@@ -275,11 +279,13 @@ export default function ClientView() {
                       {expanded ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
                       <span
                         className={`h-2 w-2 shrink-0 rounded-full ${st.connected ? 'bg-emerald-500' : 'bg-muted-foreground/40'}`}
-                        title={st.connected ? 'connected' : 'disconnected'}
+                        title={st.connected ? t('client.state.connected') : t('client.state.disconnected')}
                       />
                       <span className="truncate font-semibold">{n.network.alias}</span>
                       {st.connected && <Badge variant="muted">{st.assignedIp}</Badge>}
-                      {st.connected && <span className="text-xs text-muted-foreground">via {st.via}</span>}
+                      {st.connected && (
+                        <span className="text-xs text-muted-foreground">{t('client.via', { via: st.via })}</span>
+                      )}
                     </button>
                     <div className="flex shrink-0 gap-1">
                       {st.connected ? (
@@ -289,7 +295,7 @@ export default function ClientView() {
                           disabled={busy === n.network.alias}
                           onClick={() => run(n.network.alias, () => Disconnect(n.network.alias))}
                         >
-                          <Power className="h-4 w-4" /> Leave
+                          <Power className="h-4 w-4" /> {t('client.leave')}
                         </Button>
                       ) : (
                         <Button
@@ -299,13 +305,13 @@ export default function ClientView() {
                           onClick={() => run(n.network.alias, () => Connect(n.network as any))}
                         >
                           {busy === n.network.alias ? <Loader2 className="h-4 w-4 animate-spin" /> : <Radio className="h-4 w-4" />}
-                          Join
+                          {t('client.join')}
                         </Button>
                       )}
                       <Button
                         variant="ghost"
                         size="icon"
-                        title="Forget this network"
+                        title={t('client.forget')}
                         disabled={busy === n.network.alias}
                         onClick={() => run(n.network.alias, () => Forget(n.network.alias))}
                       >
@@ -327,35 +333,46 @@ export default function ClientView() {
                     <div>
                       <p className={`mb-1 flex items-center gap-1 text-xs ${trust.ok ? 'text-muted-foreground' : 'text-destructive'}`}>
                         {trust.ok ? <ShieldCheck className="h-3.5 w-3.5" /> : <ShieldAlert className="h-3.5 w-3.5" />}
-                        {trust.label}
+                        {t(trust.label)}
                       </p>
-                      <Row label="Control server" value={n.network.server} mono />
-                      <Row label="Names" value={st.dnsSuffix ? `*.${st.dnsSuffix}` : `*.${n.network.alias}`} mono />
-                      <Row label="Address on this device" value={st.assignedIp} mono />
+                      <Row label={t('client.row.controlServer')} value={n.network.server} mono />
+                      <Row
+                        label={t('client.row.names')}
+                        value={st.dnsSuffix ? `*.${st.dnsSuffix}` : `*.${n.network.alias}`}
+                        mono
+                      />
+                      <Row label={t('client.row.addressHere')} value={st.assignedIp} mono />
                       {st.localCidr ? (
                         <>
-                          <Row label="Address in the network" value={st.overlayIp} mono />
-                          <Row label="Local range" value={st.localCidr} mono />
+                          <Row label={t('client.row.addressInNetwork')} value={st.overlayIp} mono />
+                          <Row label={t('client.row.localRange')} value={st.localCidr} mono />
                         </>
                       ) : (
-                        <Row label="Overlay CIDR" value={st.overlayCidr} mono />
+                        <Row label={t('client.row.overlayCidr')} value={st.overlayCidr} mono />
                       )}
-                      <Row label="Relay" value={st.relayAddr} mono />
+                      <Row label={t('common.relay')} value={st.relayAddr} mono />
                     </div>
 
                     <div>
                       <p className="mb-1 flex items-center gap-2 text-sm font-medium">
-                        <Network className="h-4 w-4" /> Peers <Badge variant="muted">{st.peers?.length ?? 0}</Badge>
+                        <Network className="h-4 w-4" /> {t('client.peers')}{' '}
+                        <Badge variant="muted">{st.peers?.length ?? 0}</Badge>
                       </p>
-                      {(st.peers?.length ?? 0) === 0 && <p className="text-sm text-muted-foreground">No peers yet.</p>}
+                      {(st.peers?.length ?? 0) === 0 && (
+                        <p className="text-sm text-muted-foreground">{t('client.peers.none')}</p>
+                      )}
                       {st.peers?.map((p) => (
                         <div key={p.public_key} className="flex items-center justify-between rounded-md px-2 py-1.5 text-sm hover:bg-accent">
                           <span className="flex items-center gap-2 font-medium">
                             <span
                               className={`h-1.5 w-1.5 rounded-full ${st.handshakes?.[p.assigned_ip] ? 'bg-emerald-500' : 'bg-muted-foreground/40'}`}
-                              title={st.handshakes?.[p.assigned_ip] ? 'tunnel established' : 'connecting'}
+                              title={
+                                st.handshakes?.[p.assigned_ip]
+                                  ? t('client.peer.established')
+                                  : t('client.peer.connecting')
+                              }
                             />
-                            {p.hostname || '(unnamed)'}
+                            {p.hostname || t('common.unnamed')}
                             {p.group && <Badge variant="muted">{p.group}</Badge>}
                           </span>
                           <span className="font-mono text-muted-foreground">{p.assigned_ip}</span>
@@ -365,9 +382,12 @@ export default function ClientView() {
 
                     <div>
                       <p className="mb-1 flex items-center gap-2 text-sm font-medium">
-                        <Share2 className="h-4 w-4" /> Services <Badge variant="muted">{st.services?.length ?? 0}</Badge>
+                        <Share2 className="h-4 w-4" /> {t('client.services')}{' '}
+                        <Badge variant="muted">{st.services?.length ?? 0}</Badge>
                       </p>
-                      {(st.services?.length ?? 0) === 0 && <p className="text-sm text-muted-foreground">No services published.</p>}
+                      {(st.services?.length ?? 0) === 0 && (
+                        <p className="text-sm text-muted-foreground">{t('client.services.none')}</p>
+                      )}
                       {st.services?.map((s) => (
                         <div key={s.name} className="flex items-center justify-between rounded-md px-2 py-1.5 text-sm hover:bg-accent">
                           <span className="font-mono">
@@ -391,8 +411,7 @@ export default function ClientView() {
           <Card>
             <CardContent className="flex items-center gap-2 py-3 text-sm text-muted-foreground">
               <Server className="h-4 w-4 shrink-0" />
-              Each network gets its own adapter, key, address range and names, and nothing routes between them — so two
-              networks may use the same overlay range without colliding here.
+              {t('client.isolationNote')}
             </CardContent>
           </Card>
         </div>

@@ -17,6 +17,10 @@ var trayIcon []byte
 func main() {
 	app := NewApp()
 
+	// The operating system's language is the best guess until the window opens
+	// and reports what the user actually chose.
+	initLanguage()
+
 	// System tray runs alongside the window; closing the window hides to tray.
 	go startTray(app, trayIcon)
 

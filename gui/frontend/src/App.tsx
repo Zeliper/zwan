@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react'
 import { Download, Network } from 'lucide-react'
 import { ErrorBoundary } from '@/components/error-boundary'
+import { LanguageToggle } from '@/components/language-toggle'
 import { ThemeToggle } from '@/components/theme-toggle'
+import { useT } from '@/lib/use-i18n'
 import { Button } from '@/components/ui/button'
 import ClientView from './ClientView'
 import HostView from './HostView'
-import { ApplyUpdate, CheckUpdate, QuitApp } from '../wailsjs/go/main/App'
+import { ApplyUpdate, CheckUpdate, QuitApp, SetLanguage } from '../wailsjs/go/main/App'
 
 type Mode = 'client' | 'host'
 
@@ -17,9 +19,19 @@ interface Release {
 }
 
 export default function App() {
+  const { lang, t } = useT()
   const [mode, setMode] = useState<Mode>('client')
   const [update, setUpdate] = useState<Release | null>(null)
   const [updating, setUpdating] = useState(false)
+
+  // The tray is drawn by the Go side before this window exists, so it starts in
+  // the operating system's language. Tell it what the user actually picked —
+  // including the choice remembered from last time, which only this side knows.
+  useEffect(() => {
+    SetLanguage(lang).catch(() => {
+      /* the tray keeps its own language; the window is already right */
+    })
+  }, [lang])
 
   useEffect(() => {
     CheckUpdate()
@@ -58,14 +70,15 @@ export default function App() {
           </div>
           <div>
             <div className="text-sm font-semibold leading-none">zwan</div>
-            <div className="text-xs text-muted-foreground">private overlay network</div>
+            <div className="text-xs text-muted-foreground">{t('app.subtitle')}</div>
           </div>
         </div>
         <div className="flex items-center gap-2">
           <div className="flex rounded-md border p-0.5">
-            {tab('client', 'Join')}
-            {tab('host', 'Host')}
+            {tab('client', t('app.tab.join'))}
+            {tab('host', t('app.tab.host'))}
           </div>
+          <LanguageToggle />
           <ThemeToggle />
         </div>
       </header>
@@ -73,10 +86,11 @@ export default function App() {
       {update && (
         <div className="flex items-center justify-between gap-3 border-b bg-primary/10 px-6 py-2 text-sm">
           <span className="flex items-center gap-2">
-            <Download className="h-4 w-4" /> Update available: <span className="font-semibold">v{update.version}</span>
+            <Download className="h-4 w-4" /> {t('app.update.available')}{' '}
+            <span className="font-semibold">v{update.version}</span>
           </span>
           <Button size="sm" onClick={doUpdate} disabled={updating || !update.installerUrl}>
-            {updating ? 'Updating…' : 'Update now'}
+            {updating ? t('app.update.running') : t('app.update.now')}
           </Button>
         </div>
       )}

@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { HostGenToken, HostStart, HostStatus, HostStop, ParseACL } from '../wailsjs/go/main/App'
+import { Mono, useT } from '@/lib/use-i18n'
 
 interface Peer {
   hostname: string
@@ -98,6 +99,7 @@ function ruleLines(rules?: Rule[]): string {
 }
 
 export default function HostView() {
+  const { t, tx } = useT()
   const [cfg, setCfg] = useState<ServerConfig>(defaults)
   const [groups, setGroups] = useState<GroupRow[]>([])
   const [rulesText, setRulesText] = useState('')
@@ -188,9 +190,10 @@ export default function HostView() {
     <div className="mb-4 flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
       <div>
-        The control-server service is not installed, so the network runs inside this app and stops when you quit.
-        Re-run the installer and tick <span className="font-medium">Server</span>, or run
-        <span className="mx-1 font-mono">zwan-server service install</span> as Administrator.
+        {tx('host.serviceNotice', {
+          server: <span className="font-medium">{t('host.serviceNotice.server')}</span>,
+          command: <Mono>zwan-server service install</Mono>,
+        })}
       </div>
     </div>
   )
@@ -201,28 +204,26 @@ export default function HostView() {
         {serviceNotice}
         <Card className="mx-auto max-w-md">
           <CardHeader>
-            <CardTitle>Host a network</CardTitle>
-            <CardDescription>
-              Run a control server + relay on this machine (needs a public IP for remote clients).
-            </CardDescription>
+            <CardTitle>{t('host.title')}</CardTitle>
+            <CardDescription>{t('host.description')}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label htmlFor="net">Network</Label>
+                <Label htmlFor="net">{t('host.network')}</Label>
                 <Input id="net" value={cfg.networkId} onChange={(e) => set('networkId', e.target.value)} />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="suffix">DNS suffix</Label>
+                <Label htmlFor="suffix">{t('host.dnsSuffix')}</Label>
                 <Input id="suffix" value={cfg.dnsSuffix} onChange={(e) => set('dnsSuffix', e.target.value)} />
               </div>
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="cidr">Overlay CIDR</Label>
+              <Label htmlFor="cidr">{t('host.cidr')}</Label>
               <Input id="cidr" value={cfg.cidr} onChange={(e) => set('cidr', e.target.value)} />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="token">Join token</Label>
+              <Label htmlFor="token">{t('host.joinToken')}</Label>
               <div className="flex gap-2">
                 <Input
                   id="token"
@@ -230,14 +231,14 @@ export default function HostView() {
                   onChange={(e) => set('token', e.target.value)}
                   className="font-mono"
                 />
-                <Button variant="outline" size="icon" onClick={gen} title="Generate">
+                <Button variant="outline" size="icon" onClick={gen} title={t('common.generate')}>
                   <RefreshCw className="h-4 w-4" />
                 </Button>
               </div>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label htmlFor="ctrl">Control addr</Label>
+                <Label htmlFor="ctrl">{t('host.controlAddr')}</Label>
                 <Input
                   id="ctrl"
                   value={cfg.controlAddr}
@@ -246,7 +247,7 @@ export default function HostView() {
                 />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="relay">Relay addr</Label>
+                <Label htmlFor="relay">{t('host.relayAddr')}</Label>
                 <Input
                   id="relay"
                   value={cfg.relayAddr}
@@ -256,20 +257,18 @@ export default function HostView() {
               </div>
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="tls">TLS</Label>
+              <Label htmlFor="tls">{t('host.tls')}</Label>
               <select id="tls" value={cfg.tlsMode} onChange={(e) => set('tlsMode', e.target.value)} className={inputClass}>
-                <option value="auto">Automatic — certificate for the domain, otherwise a pinned key</option>
-                <option value="self">Self-signed key, clients pin it</option>
-                <option value="acme">Public certificate (ACME) for the domain</option>
-                <option value="off">Off — plaintext HTTP (local testing only)</option>
+                <option value="auto">{t('host.tls.auto')}</option>
+                <option value="self">{t('host.tls.self')}</option>
+                <option value="acme">{t('host.tls.acme')}</option>
+                <option value="off">{t('host.tls.off')}</option>
               </select>
-              {cfg.tlsMode === 'off' && (
-                <p className="text-xs text-destructive">Join tokens and all control traffic would be sent unencrypted.</p>
-              )}
+              {cfg.tlsMode === 'off' && <p className="text-xs text-destructive">{t('host.tls.offWarning')}</p>}
             </div>
             {cfg.tlsMode !== 'off' && (
               <div className="space-y-1.5">
-                <Label htmlFor="domain">Domain (optional)</Label>
+                <Label htmlFor="domain">{t('host.domain')}</Label>
                 <Input
                   id="domain"
                   value={(cfg.domains ?? []).join(', ')}
@@ -282,51 +281,48 @@ export default function HostView() {
                         .filter(Boolean),
                     )
                   }
-                  placeholder="vpn.example.com — leave empty to use a pinned key"
+                  placeholder={t('host.domain.placeholder')}
                   className="font-mono"
                 />
-                <p className="text-xs text-muted-foreground">
-                  With a domain pointed at this machine, a certificate is issued automatically (needs port 443, or port 80
-                  reachable).
-                </p>
+                <p className="text-xs text-muted-foreground">{t('host.domain.help')}</p>
               </div>
             )}
             <div className="space-y-1.5">
-              <Label htmlFor="public">Public address (optional)</Label>
+              <Label htmlFor="public">{t('host.publicHost')}</Label>
               <Input
                 id="public"
                 value={cfg.publicHost}
                 onChange={(e) => set('publicHost', e.target.value)}
-                placeholder="203.0.113.5:8787 — what clients should connect to"
+                placeholder={t('host.publicHost.placeholder')}
                 className="font-mono"
               />
             </div>
             <div className="space-y-2 rounded-md border border-border p-3">
               <div className="flex items-center gap-2">
                 <KeyRound className="h-4 w-4" />
-                <Label className="text-sm font-medium">Access control</Label>
+                <Label className="text-sm font-medium">{t('host.acl')}</Label>
               </div>
               <p className="text-xs text-muted-foreground">
-                Optional. Each group gets its own join token; the token above puts members in <span className="font-mono">default</span>.
+                {tx('host.acl.help', { default: <Mono>default</Mono> })}
               </p>
               {groups.map((g, i) => (
                 <div key={i} className="flex gap-2">
                   <Input
                     value={g.name}
                     onChange={(e) => setGroups(groups.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))}
-                    placeholder="group"
+                    placeholder={t('host.acl.groupPlaceholder')}
                     className="w-28"
                   />
                   <Input
                     value={g.token}
                     onChange={(e) => setGroups(groups.map((x, j) => (j === i ? { ...x, token: e.target.value } : x)))}
-                    placeholder="join token"
+                    placeholder={t('client.token.placeholder')}
                     className="font-mono"
                   />
                   <Button
                     variant="outline"
                     size="icon"
-                    title="Generate"
+                    title={t('common.generate')}
                     onClick={async () => {
                       const t = await HostGenToken()
                       setGroups(groups.map((x, j) => (j === i ? { ...x, token: t } : x)))
@@ -334,16 +330,21 @@ export default function HostView() {
                   >
                     <RefreshCw className="h-4 w-4" />
                   </Button>
-                  <Button variant="ghost" size="icon" title="Remove" onClick={() => setGroups(groups.filter((_, j) => j !== i))}>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    title={t('common.remove')}
+                    onClick={() => setGroups(groups.filter((_, j) => j !== i))}
+                  >
                     <X className="h-4 w-4" />
                   </Button>
                 </div>
               ))}
               <Button variant="outline" size="sm" onClick={() => setGroups([...groups, { name: '', token: '' }])}>
-                <Plus className="h-4 w-4" /> Add group
+                <Plus className="h-4 w-4" /> {t('host.acl.addGroup')}
               </Button>
               <div className="space-y-1.5 pt-1">
-                <Label htmlFor="rules">Rules</Label>
+                <Label htmlFor="rules">{t('host.acl.rules')}</Label>
                 <textarea
                   id="rules"
                   rows={3}
@@ -353,14 +354,13 @@ export default function HostView() {
                   className={`${inputClass} h-auto py-2 font-mono`}
                 />
                 <p className="text-xs text-muted-foreground">
-                  One <span className="font-mono">src-&gt;dst</span> per line. No rules means everyone reaches everyone; the first rule
-                  makes everything else denied.
+                  {tx('host.acl.rulesHelp', { form: <Mono>src-&gt;dst</Mono> })}
                 </p>
               </div>
             </div>
             {error && <p className="text-sm text-destructive">{error}</p>}
             <Button className="w-full" onClick={start} disabled={busy || !cfg.token}>
-              <Play className="h-4 w-4" /> Start hosting
+              <Play className="h-4 w-4" /> {t('host.start')}
             </Button>
           </CardContent>
         </Card>
@@ -374,60 +374,65 @@ export default function HostView() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="flex items-center gap-2 text-lg font-semibold">
-            {state!.config.networkId} <Badge variant="success">hosting</Badge>
+            {state!.config.networkId} <Badge variant="success">{t('host.badge.hosting')}</Badge>
           </h1>
           <p className="text-sm text-muted-foreground">
             *.{state!.config.dnsSuffix}
-            {managed && ' · runs in the background service'}
+            {managed && ` · ${t('host.inBackground')}`}
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={stop} disabled={busy}>
-          <Square className="h-4 w-4" /> Stop
+          <Square className="h-4 w-4" /> {t('host.stop')}
         </Button>
       </div>
 
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center gap-2 text-base">
-            <Server className="h-4 w-4" /> Share with clients
+            <Server className="h-4 w-4" /> {t('host.share')}
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-2 text-sm">
           <div className="flex items-center justify-between gap-2">
-            <span className="shrink-0 text-muted-foreground">Join address</span>
+            <span className="shrink-0 text-muted-foreground">{t('host.share.joinAddress')}</span>
             <span className="flex min-w-0 items-center gap-2">
               <span className="truncate font-mono" title={state!.joinUrl}>
                 {state!.joinUrl}
               </span>
-              <Button variant="ghost" size="icon" onClick={() => navigator.clipboard?.writeText(state!.joinUrl)} title="Copy">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => navigator.clipboard?.writeText(state!.joinUrl)}
+                title={t('common.copy')}
+              >
                 <Copy className="h-4 w-4" />
               </Button>
             </span>
           </div>
           <div className="flex items-center justify-between gap-2">
-            <span className="text-muted-foreground">Token</span>
+            <span className="text-muted-foreground">{t('host.share.token')}</span>
             <span className="flex items-center gap-2">
               <span className="font-mono">{state!.config.token}</span>
               <Button
                 variant="ghost"
                 size="icon"
                 onClick={() => navigator.clipboard?.writeText(state!.config.token)}
-                title="Copy"
+                title={t('common.copy')}
               >
                 <Copy className="h-4 w-4" />
               </Button>
             </span>
           </div>
           <div className="flex items-center justify-between">
-            <span className="text-muted-foreground">Control</span>
+            <span className="text-muted-foreground">{t('host.share.control')}</span>
             <span className="font-mono">{state!.config.controlAddr}</span>
           </div>
           <div className="flex items-center justify-between">
-            <span className="text-muted-foreground">Relay</span>
+            <span className="text-muted-foreground">{t('common.relay')}</span>
             <span className="font-mono">{state!.config.relayAddr}</span>
           </div>
           <div className="flex items-center justify-between gap-2">
-            <span className="shrink-0 text-muted-foreground">Trust</span>
+            <span className="shrink-0 text-muted-foreground">{t('host.share.trust')}</span>
             <span className={`flex min-w-0 items-center gap-1.5 ${state!.tlsMode === 'off' ? 'text-destructive' : ''}`}>
               {state!.tlsMode === 'off' ? (
                 <ShieldAlert className="h-4 w-4 shrink-0" />
@@ -436,25 +441,26 @@ export default function HostView() {
               )}
               <span className="truncate font-mono" title={state!.pin || state!.tlsMode}>
                 {state!.tlsMode === 'off'
-                  ? 'plaintext — no TLS'
+                  ? t('host.trust.off')
                   : state!.tlsMode === 'acme'
-                    ? 'ACME certificate'
+                    ? t('host.trust.acme')
                     : state!.pin}
               </span>
               {state!.pin && (
-                <Button variant="ghost" size="icon" onClick={() => navigator.clipboard?.writeText(state!.pin)} title="Copy pin">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => navigator.clipboard?.writeText(state!.pin)}
+                  title={t('host.share.copyPin')}
+                >
                   <Copy className="h-4 w-4" />
                 </Button>
               )}
             </span>
           </div>
-          <p className="pt-1 text-xs text-muted-foreground">
-            The join address already contains the key pin — clients can paste it into the Server field as-is.
-          </p>
+          <p className="pt-1 text-xs text-muted-foreground">{t('host.share.pinNote')}</p>
           {/loopback|127\.0\.0\.1|localhost/.test(state!.joinUrl) && (
-            <p className="text-xs text-muted-foreground">
-              It points at this machine. Set a public address and start again so remote clients get a reachable host.
-            </p>
+            <p className="text-xs text-muted-foreground">{t('host.share.loopbackNote')}</p>
           )}
         </CardContent>
       </Card>
@@ -462,15 +468,15 @@ export default function HostView() {
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center gap-2 text-base">
-            <KeyRound className="h-4 w-4" /> Access control
+            <KeyRound className="h-4 w-4" /> {t('host.acl')}
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-2 text-sm">
           {(state!.config.acl?.length ?? 0) === 0 ? (
-            <p className="text-muted-foreground">No rules — every member reaches every other.</p>
+            <p className="text-muted-foreground">{t('host.acl.noRules')}</p>
           ) : (
             <div className="space-y-1">
-              <p className="text-muted-foreground">Default-deny except:</p>
+              <p className="text-muted-foreground">{t('host.acl.denyExcept')}</p>
               {state!.config.acl!.map((r, i) => (
                 <div key={i} className="font-mono text-xs">
                   {r.src.join(',')}-&gt;{r.dst.join(',')}
@@ -479,7 +485,7 @@ export default function HostView() {
             </div>
           )}
           <div className="flex flex-wrap items-center gap-2 pt-1">
-            <span className="text-muted-foreground">Groups</span>
+            <span className="text-muted-foreground">{t('host.acl.groups')}</span>
             <Badge variant="muted">default</Badge>
             {Object.keys(state!.config.groupTokens ?? {}).map((g) => (
               <Badge key={g} variant="muted">
@@ -489,10 +495,15 @@ export default function HostView() {
           </div>
           {Object.entries(state!.config.groupTokens ?? {}).map(([g, tok]) => (
             <div key={g} className="flex items-center justify-between gap-2">
-              <span className="text-muted-foreground">Token · {g}</span>
+              <span className="text-muted-foreground">{t('host.acl.groupToken', { group: g })}</span>
               <span className="flex items-center gap-2">
                 <span className="font-mono">{tok}</span>
-                <Button variant="ghost" size="icon" onClick={() => navigator.clipboard?.writeText(tok)} title="Copy">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => navigator.clipboard?.writeText(tok)}
+                  title={t('common.copy')}
+                >
                   <Copy className="h-4 w-4" />
                 </Button>
               </span>
@@ -504,15 +515,18 @@ export default function HostView() {
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center gap-2 text-base">
-            <Users className="h-4 w-4" /> Members <Badge variant="muted">{state!.peers?.length ?? 0}</Badge>
+            <Users className="h-4 w-4" /> {t('host.members')}{' '}
+            <Badge variant="muted">{state!.peers?.length ?? 0}</Badge>
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-1">
-          {(state!.peers?.length ?? 0) === 0 && <p className="text-sm text-muted-foreground">No members yet.</p>}
+          {(state!.peers?.length ?? 0) === 0 && (
+            <p className="text-sm text-muted-foreground">{t('host.members.none')}</p>
+          )}
           {state!.peers?.map((p) => (
             <div key={p.public_key} className="flex items-center justify-between rounded-md px-2 py-1.5 text-sm hover:bg-accent">
               <span className="flex items-center gap-2 font-medium">
-                {p.hostname || '(unnamed)'}
+                {p.hostname || t('common.unnamed')}
                 {p.group && <Badge variant="muted">{p.group}</Badge>}
               </span>
               <span className="font-mono text-muted-foreground">{p.assigned_ip}</span>
@@ -524,11 +538,14 @@ export default function HostView() {
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center gap-2 text-base">
-            <Share2 className="h-4 w-4" /> Services <Badge variant="muted">{state!.services?.length ?? 0}</Badge>
+            <Share2 className="h-4 w-4" /> {t('host.services')}{' '}
+            <Badge variant="muted">{state!.services?.length ?? 0}</Badge>
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-1">
-          {(state!.services?.length ?? 0) === 0 && <p className="text-sm text-muted-foreground">No services published.</p>}
+          {(state!.services?.length ?? 0) === 0 && (
+            <p className="text-sm text-muted-foreground">{t('host.services.none')}</p>
+          )}
           {state!.services?.map((s) => (
             <div key={s.name} className="flex items-center justify-between rounded-md px-2 py-1.5 text-sm hover:bg-accent">
               <span className="font-mono">

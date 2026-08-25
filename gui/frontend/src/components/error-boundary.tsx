@@ -1,6 +1,7 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
 import { AlertTriangle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { snapshot, translate } from '@/lib/i18n'
 
 interface Props {
   children: ReactNode
@@ -44,22 +45,24 @@ export class ErrorBoundary extends Component<Props, State> {
     const { error } = this.state
     if (!error) return this.props.children
 
+    // Read the language directly rather than through the hook: this is a class
+    // component by necessity — only a class can catch a render error — and it
+    // renders once, at the moment something already went wrong.
+    const t = (key: Parameters<typeof translate>[1]) => translate(snapshot(), key)
+
     return (
       <div className="space-y-3 rounded-lg border border-destructive/40 bg-destructive/5 p-6">
         <div className="flex items-center gap-2 font-semibold">
           <AlertTriangle className="h-4 w-4 text-destructive" />
-          This view failed to render
+          {t('error.title')}
         </div>
-        <p className="text-sm text-muted-foreground">
-          The rest of the app still works — switch tabs and come back, or reopen the window. Nothing
-          about your networks has changed.
-        </p>
+        <p className="text-sm text-muted-foreground">{t('error.body')}</p>
         <pre className="max-h-48 overflow-auto rounded bg-muted p-3 font-mono text-xs">
           {error.message}
           {error.stack ? `\n\n${error.stack}` : ''}
         </pre>
         <Button size="sm" variant="outline" onClick={() => this.setState({ error: null })}>
-          Try again
+          {t('error.retry')}
         </Button>
       </div>
     )

@@ -34,6 +34,7 @@ independent networks at once**. Open source, no central dependency.
 - 👥 **Group ACLs** — hand each group its own join token and write rules between them; a member never receives the keys of a peer it may not reach.
 - 🔀 **Multi-network client** — join several independent networks at once. Each gets its own adapter, key, UDP port and name space, and nothing routes between them.
 - 🖥️ **Desktop app** — one tray app for both roles (join a network, host one), with a **system dark/light theme**; SYSTEM services do the work in the background.
+- 🌏 **English and Korean** — window and tray follow the system language and can be switched from the header; addresses, tokens and commands stay as they are.
 - ⬆️ **Auto-update** — the client updates itself from GitHub releases; the server can self-update too (`--auto-update`).
 
 ## How it works
