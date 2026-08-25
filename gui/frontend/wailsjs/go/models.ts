@@ -28,7 +28,7 @@ export namespace config {
 	    relayAddr: string;
 	    relayPublic: string;
 	    tlsMode: string;
-	    domains: string[];
+	    domains?: string[];
 	    publicHost: string;
 	    groupTokens?: Record<string, string>;
 	    acl?: acl.Rule[];

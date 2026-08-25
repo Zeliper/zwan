@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Download, Network } from 'lucide-react'
+import { ErrorBoundary } from '@/components/error-boundary'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { Button } from '@/components/ui/button'
 import ClientView from './ClientView'
@@ -81,7 +82,10 @@ export default function App() {
       )}
 
       <main className="mx-auto w-full max-w-3xl p-6">
-        {mode === 'client' ? <ClientView /> : <HostView />}
+        {/* Keyed by mode so a view that threw gets a clean try when you come back to it. */}
+        <ErrorBoundary resetKey={mode}>
+          {mode === 'client' ? <ClientView /> : <HostView />}
+        </ErrorBoundary>
       </main>
     </div>
   )

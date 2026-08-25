@@ -31,7 +31,7 @@ type Config struct {
 	RelayAddr   string   `json:"relayAddr"`
 	RelayPublic string   `json:"relayPublic"`
 	TLSMode     string   `json:"tlsMode"`
-	Domains     []string `json:"domains"`
+	Domains     []string `json:"domains,omitempty"`
 	PublicHost  string   `json:"publicHost"`
 
 	// GroupTokens maps an access-control group to the join token that admits

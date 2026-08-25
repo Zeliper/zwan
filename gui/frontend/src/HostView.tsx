@@ -73,6 +73,24 @@ const defaults: ServerConfig = {
 const inputClass =
   'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring'
 
+// merge lays a saved configuration over the defaults without letting a missing
+// or null field win.
+//
+// Spreading the server's object directly would do that: a list that arrives as
+// null replaces the empty list the form expects, and the failure then surfaces
+// as a call on nothing while rendering — which takes the whole view down rather
+// than the one field. The fields that must be a list are named here so a new
+// null cannot reach the form unnoticed.
+function merge(saved?: Partial<ServerConfig>): ServerConfig {
+  const c = { ...defaults, ...(saved ?? {}) }
+  return {
+    ...c,
+    domains: Array.isArray(c.domains) ? c.domains : [],
+    acl: Array.isArray(c.acl) ? c.acl : [],
+    groupTokens: c.groupTokens ?? {},
+  }
+}
+
 // ruleLines renders stored rules back into the one-per-line text the operator
 // typed, matching the shorthand the Go parser accepts.
 function ruleLines(rules?: Rule[]): string {
@@ -111,9 +129,9 @@ export default function HostView() {
       if (!seeded.current && s?.config) {
         seeded.current = true
         // A saved config with no token is a fresh install: generate one.
-        if (s.config.token) setCfg({ ...defaults, ...s.config })
+        if (s.config.token) setCfg(merge(s.config))
         else {
-          setCfg({ ...defaults, ...s.config, token: '' })
+          setCfg({ ...merge(s.config), token: '' })
           gen()
         }
         setGroups(Object.entries(s.config.groupTokens ?? {}).map(([name, token]) => ({ name, token })))
@@ -254,7 +272,7 @@ export default function HostView() {
                 <Label htmlFor="domain">Domain (optional)</Label>
                 <Input
                   id="domain"
-                  value={cfg.domains.join(', ')}
+                  value={(cfg.domains ?? []).join(', ')}
                   onChange={(e) =>
                     set(
                       'domains',
