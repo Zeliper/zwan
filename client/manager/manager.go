@@ -33,12 +33,31 @@ import (
 // DefaultBasePort is the first WireGuard UDP port tried for a network.
 const DefaultBasePort = 51820
 
+// DefaultLocalPool is carved into a range per network so two networks can share
+// an overlay range (design doc 38).
+//
+// It sits in the carrier-grade NAT block, which is where overlay addressing
+// lives by convention and where a home or office LAN will not be. Only these
+// addresses reach the host's routing table; a network's real range never does,
+// so a server is free to use this block as its overlay range too.
+const DefaultLocalPool = "100.112.0.0/12"
+
+// DefaultLocalBits is the prefix length each network gets out of the pool.
+const DefaultLocalBits = 16
+
 // Config configures the manager.
 type Config struct {
 	DNSAddr     string // resolver listen address ("" disables local DNS)
 	ProductName string
 	DeviceUUID  string
 	BasePort    int // first WireGuard UDP port to try (default DefaultBasePort)
+
+	// LocalPool is carved into a range per network; LocalBits is how large each
+	// slice is. NoTranslate turns the whole scheme off, so every network uses
+	// its overlay addresses directly and only one of any overlapping pair works.
+	LocalPool   string
+	LocalBits   int
+	NoTranslate bool
 }
 
 // Status is one network's saved settings plus its live state.
@@ -52,8 +71,19 @@ type Status struct {
 }
 
 type entry struct {
-	eng  *engine.Engine
-	port int
+	eng    *engine.Engine
+	port   int
+	prefix netip.Prefix // this network's slice of the local pool
+}
+
+// stop tears the network down. An entry can exist without a running engine —
+// a network is remembered even when it failed to start — so this is where that
+// is handled rather than at every call site.
+func (e *entry) stop() {
+	if e == nil || e.eng == nil {
+		return
+	}
+	e.eng.Stop()
 }
 
 // Manager owns every joined network on this device.
@@ -73,6 +103,12 @@ func New(cfg Config) *Manager {
 	}
 	if cfg.ProductName == "" {
 		cfg.ProductName = "zwan"
+	}
+	if cfg.LocalPool == "" {
+		cfg.LocalPool = DefaultLocalPool
+	}
+	if cfg.LocalBits == 0 {
+		cfg.LocalBits = DefaultLocalBits
 	}
 	return &Manager{cfg: cfg, nets: map[string]*entry{}}
 }
@@ -120,13 +156,18 @@ func (m *Manager) Connect(n profile.Network) error {
 	if prev, ok := m.nets[n.Alias]; ok {
 		delete(m.nets, n.Alias)
 		m.mu.Unlock()
-		prev.eng.Stop()
+		prev.stop()
 		m.mu.Lock()
 	}
 	port := m.freePortLocked()
+	prefix, prefixErr := m.freePrefixLocked()
 	dns := m.dns
 	cfg := m.cfg
 	m.mu.Unlock()
+	if prefixErr != nil {
+		m.remember(n)
+		return prefixErr
+	}
 
 	eng := engine.New()
 	err := eng.Start(engine.Config{
@@ -140,6 +181,7 @@ func (m *Manager) Connect(n profile.Network) error {
 		WGPort:      port,
 		Alias:       n.Alias,
 		DNS:         zoneOf(dns),
+		LocalPrefix: prefixString(prefix),
 		ProductName: cfg.ProductName,
 	})
 	if err != nil {
@@ -150,7 +192,7 @@ func (m *Manager) Connect(n profile.Network) error {
 	}
 
 	m.mu.Lock()
-	m.nets[n.Alias] = &entry{eng: eng, port: port}
+	m.nets[n.Alias] = &entry{eng: eng, port: port, prefix: prefix}
 	m.mu.Unlock()
 	m.remember(n)
 	return nil
@@ -164,7 +206,7 @@ func (m *Manager) Disconnect(alias string) error {
 	delete(m.nets, alias)
 	m.mu.Unlock()
 	if ok {
-		e.eng.Stop()
+		e.stop()
 	}
 
 	m.mu.Lock()
@@ -209,7 +251,7 @@ func (m *Manager) Statuses() []Status {
 	out := make([]Status, 0, len(saved))
 	for _, n := range saved {
 		st := Status{Network: n}
-		if e, ok := live[n.Alias]; ok {
+		if e, ok := live[n.Alias]; ok && e.eng != nil {
 			st.Engine = e.eng.Status()
 		}
 		out = append(out, st)
@@ -222,17 +264,17 @@ func (m *Manager) Statuses() []Status {
 // Stop takes every network down and releases the resolver.
 func (m *Manager) Stop() {
 	m.mu.Lock()
-	engines := make([]*engine.Engine, 0, len(m.nets))
+	stopping := make([]*entry, 0, len(m.nets))
 	for _, e := range m.nets {
-		engines = append(engines, e.eng)
+		stopping = append(stopping, e)
 	}
 	m.nets = map[string]*entry{}
 	dns := m.dns
 	m.dns = nil
 	m.mu.Unlock()
 
-	for _, e := range engines {
-		e.Stop()
+	for _, e := range stopping {
+		e.stop()
 	}
 	if dns != nil {
 		_ = dns.Shutdown()
@@ -258,6 +300,53 @@ func (m *Manager) remember(n profile.Network) {
 	if err := profile.SaveNetworks(nets); err != nil {
 		log.Printf("manager: save networks: %v", err)
 	}
+}
+
+// freePrefixLocked carves the next unused slice out of the local pool. Callers
+// hold the mutex.
+func (m *Manager) freePrefixLocked() (netip.Prefix, error) {
+	if m.cfg.NoTranslate {
+		return netip.Prefix{}, nil
+	}
+	pool, err := netip.ParsePrefix(m.cfg.LocalPool)
+	if err != nil {
+		return netip.Prefix{}, fmt.Errorf("local pool %q: %w", m.cfg.LocalPool, err)
+	}
+	pool = pool.Masked()
+	bits := m.cfg.LocalBits
+	if bits <= pool.Bits() || bits > 30 {
+		return netip.Prefix{}, fmt.Errorf("local slice /%d does not fit inside pool %s", bits, pool)
+	}
+	taken := make(map[netip.Prefix]bool, len(m.nets))
+	for _, e := range m.nets {
+		taken[e.prefix] = true
+	}
+	step := uint32(1) << uint(32-bits)
+	base := prefixBase(pool)
+	count := uint32(1) << uint(bits-pool.Bits())
+	for i := uint32(0); i < count; i++ {
+		p := netip.PrefixFrom(addrFromUint32(base+i*step), bits)
+		if !taken[p] {
+			return p, nil
+		}
+	}
+	return netip.Prefix{}, fmt.Errorf("local pool %s has no free /%d left", pool, bits)
+}
+
+func prefixBase(p netip.Prefix) uint32 {
+	b := p.Addr().As4()
+	return uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
+}
+
+func addrFromUint32(v uint32) netip.Addr {
+	return netip.AddrFrom4([4]byte{byte(v >> 24), byte(v >> 16), byte(v >> 8), byte(v)})
+}
+
+func prefixString(p netip.Prefix) string {
+	if !p.IsValid() {
+		return ""
+	}
+	return p.String()
 }
 
 // freePortLocked picks a UDP port no other network on this device is using.
@@ -297,7 +386,9 @@ func addOverlapWarnings(list []Status) {
 	}
 	var spans []span
 	for _, s := range list {
-		if !s.Engine.Connected || s.Engine.OverlayCIDR == "" {
+		// A translating network keeps its overlay range off the host's routing
+		// table, so it cannot collide with anything.
+		if !s.Engine.Connected || s.Engine.OverlayCIDR == "" || s.Engine.LocalCIDR != "" {
 			continue
 		}
 		p, err := netip.ParsePrefix(s.Engine.OverlayCIDR)
@@ -322,7 +413,7 @@ func addOverlapWarnings(list []Status) {
 		}
 		sort.Strings(others)
 		list[i].Warning = fmt.Sprintf(
-			"overlay range %s overlaps %s; addresses can collide until per-network translation lands",
+			"overlay range %s overlaps %s, and address translation is off, so one of them will lose peers",
 			list[i].Engine.OverlayCIDR, strings.Join(others, ", "))
 	}
 }

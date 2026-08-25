@@ -86,6 +86,8 @@ export namespace engine {
 	    dnsSuffix: string;
 	    overlayCidr: string;
 	    assignedIp: string;
+	    overlayIp: string;
+	    localCidr: string;
 	    relayAddr: string;
 	    publicKey: string;
 	    via: string;
@@ -107,6 +109,8 @@ export namespace engine {
 	        this.dnsSuffix = source["dnsSuffix"];
 	        this.overlayCidr = source["overlayCidr"];
 	        this.assignedIp = source["assignedIp"];
+	        this.overlayIp = source["overlayIp"];
+	        this.localCidr = source["localCidr"];
 	        this.relayAddr = source["relayAddr"];
 	        this.publicKey = source["publicKey"];
 	        this.via = source["via"];

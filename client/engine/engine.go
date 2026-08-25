@@ -19,6 +19,7 @@ import (
 	"github.com/Zeliper/zwan/client/l4"
 	"github.com/Zeliper/zwan/client/resolver"
 	"github.com/Zeliper/zwan/client/tun"
+	"github.com/Zeliper/zwan/client/vip"
 	"github.com/Zeliper/zwan/client/wg"
 	"github.com/Zeliper/zwan/client/wgbind"
 	"github.com/Zeliper/zwan/shared/keys"
@@ -50,6 +51,11 @@ type Config struct {
 	DNS         Zone   // shared record sink; when nil the engine may run its own resolver
 	ProductName string // for the default adapter name
 
+	// LocalPrefix gives this network an address range that is unique on this
+	// device, so two networks may share an overlay range (design doc 38).
+	// Empty means no translation: the device uses the overlay addresses as-is.
+	LocalPrefix string
+
 	// Alias is the local DNS suffix for this network. Two networks can carry
 	// the same server-side suffix, so the device picks its own short name and
 	// reaches services as <service>.<alias> (design doc 47.1). Empty means use
@@ -70,7 +76,9 @@ type Status struct {
 	NetworkID   string          `json:"networkId"`
 	DNSSuffix   string          `json:"dnsSuffix"`
 	OverlayCIDR string          `json:"overlayCidr"`
-	AssignedIP  string          `json:"assignedIp"`
+	AssignedIP  string          `json:"assignedIp"` // the address this device actually holds
+	OverlayIP   string          `json:"overlayIp"`  // the address the control server assigned
+	LocalCIDR   string          `json:"localCidr"`  // local range in use ("" when not translating)
 	RelayAddr   string          `json:"relayAddr"`
 	PublicKey   string          `json:"publicKey"`
 	Via         string          `json:"via"` // "relay" or "direct"
@@ -147,12 +155,37 @@ func (e *Engine) Start(cfg Config) error {
 		adapterName = fmt.Sprintf("%s-%s", cfg.ProductName, res.Register.NetworkID)
 	}
 
+	xlate, err := newTranslator(cfg.LocalPrefix, res.Register.OverlayCIDR)
+	if err != nil {
+		e.setErr("local address range: %v", err)
+		return err
+	}
+
 	ad, err := tun.Create(adapterName, tun.DefaultMTU)
 	if err != nil {
 		e.setErr("adapter: %v", err)
 		return err
 	}
-	if err := ad.SetNodeIP(res.Register.AssignedIP); err != nil {
+	// With translation on, the adapter carries this device's local address and
+	// the tunnel carries the overlay one; the wrapper sits between them.
+	deviceIP := res.Register.AssignedIP
+	if xlate.on() {
+		selfAddr, err := netip.ParseAddr(res.Register.AssignedIP)
+		if err != nil {
+			_ = ad.Close()
+			e.setErr("assigned ip: %v", err)
+			return err
+		}
+		wrapped, local, err := vip.Wrap(ad.Dev, xlate.table, selfAddr)
+		if err != nil {
+			_ = ad.Close()
+			e.setErr("local address: %v", err)
+			return err
+		}
+		ad.Dev = wrapped
+		deviceIP = local.String()
+	}
+	if err := ad.SetNodeIP(deviceIP); err != nil {
 		_ = ad.Close()
 		e.setErr("assign ip: %v", err)
 		return err
@@ -216,7 +249,8 @@ func (e *Engine) Start(cfg Config) error {
 	e.st = Status{
 		Connected: true, Server: cl.BaseURL(), Pinned: cl.Pin() != "",
 		NetworkID: res.Register.NetworkID, DNSSuffix: suffix,
-		OverlayCIDR: res.Register.OverlayCIDR, AssignedIP: res.Register.AssignedIP,
+		OverlayCIDR: res.Register.OverlayCIDR, AssignedIP: deviceIP,
+		OverlayIP: res.Register.AssignedIP, LocalCIDR: xlate.cidr(),
 		RelayAddr: res.Register.RelayAddr, PublicKey: res.PublicKey, Via: via,
 		Handshakes: map[string]bool{},
 	}
@@ -224,7 +258,7 @@ func (e *Engine) Start(cfg Config) error {
 	done := e.done
 	e.mu.Unlock()
 
-	go e.run(cl, dev, ad, zone, owned, res.Register.AssignedIP, suffix, cfg, stop, done)
+	go e.run(cl, dev, ad, zone, owned, xlate, res.Register.AssignedIP, deviceIP, suffix, cfg, stop, done)
 	return nil
 }
 
@@ -244,7 +278,7 @@ func (e *Engine) Stop() {
 	e.mu.Unlock()
 }
 
-func (e *Engine) run(cl *join.Client, dev *wg.Device, ad *tun.Adapter, zone Zone, owned *resolver.Resolver, selfIP, suffix string, cfg Config, stop, done chan struct{}) {
+func (e *Engine) run(cl *join.Client, dev *wg.Device, ad *tun.Adapter, zone Zone, owned *resolver.Resolver, xlate translator, selfIP, deviceIP, suffix string, cfg Config, stop, done chan struct{}) {
 	defer close(done)
 	defer func() {
 		// Drop this network's names first: leaving a network must stop its
@@ -287,10 +321,16 @@ func (e *Engine) run(cl *join.Client, dev *wg.Device, ad *tun.Adapter, zone Zone
 			if cfg.UseRelay {
 				endpoint = p.AssignedIP
 			}
+			// WireGuard is addressed in overlay space; the operating system is
+			// addressed in local space.
 			wgPeers = append(wgPeers, wg.Peer{PublicKeyHex: hexKey, Endpoint: endpoint, AllowedIP: p.AssignedIP + "/32"})
-			if !routed[p.AssignedIP] {
-				if err := ad.AddPeerRoute(p.AssignedIP); err == nil {
-					routed[p.AssignedIP] = true
+			local, ok := xlate.local(p.AssignedIP)
+			if !ok {
+				continue
+			}
+			if !routed[local] {
+				if err := ad.AddPeerRoute(local); err == nil {
+					routed[local] = true
 				}
 			}
 		}
@@ -304,14 +344,19 @@ func (e *Engine) run(cl *join.Client, dev *wg.Device, ad *tun.Adapter, zone Zone
 
 		svcs, _ := cl.Services()
 		svcs = republish(cl, cfg.Publish, svcs, selfIP)
-		updateDNS(zone, suffix, peers, svcs)
-		access.Set(peers, svcs)
-		manageHostProxies(hostProxies, selfIP, svcs, access)
 
-		hs := handshakeMap(dev, curPeers)
+		// Everything above this line speaks overlay addresses; everything below
+		// speaks the addresses this device actually uses.
+		shownPeers := xlate.peers(peers)
+		shownSvcs := xlate.services(svcs)
+		updateDNS(zone, suffix, shownPeers, shownSvcs)
+		access.Set(shownPeers, shownSvcs)
+		manageHostProxies(hostProxies, deviceIP, shownSvcs, access)
+
+		hs := xlate.handshakes(handshakeMap(dev, curPeers))
 		e.mu.Lock()
-		e.st.Peers = peers
-		e.st.Services = svcs
+		e.st.Peers = shownPeers
+		e.st.Services = shownSvcs
 		e.st.Handshakes = hs
 		e.mu.Unlock()
 	}

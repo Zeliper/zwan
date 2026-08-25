@@ -148,10 +148,19 @@ join alice's server, local name "alice"   ->  nas.alice
 join bob's server,   local name "bob"     ->  nas.bob
 ```
 
-One caveat until per-network address translation lands: two networks that use the
-same overlay range can hand out the same address, and the host has one routing
-table to put it in. Give each network its own range (`--cidr`) and the client will
-say so if two of them collide.
+Addresses are translated per network, so two networks may use the same overlay
+range — the default is the same for everyone — without colliding here. Each
+network gets a slice of a local pool (`100.112.0.0/12` by default), and the
+device holds a local address in it while the tunnel carries the real one:
+
+```text
+alice   this device 100.112.0.1   in the network 100.64.0.1
+bob     this device 100.113.0.1   in the network 100.64.0.1   (the same, and fine)
+```
+
+Only local addresses reach the host's routing table, so a server is free to use
+that pool as its own overlay range too. Translation can be turned off, in which
+case overlapping networks are reported instead of fixed.
 
 ## Access control
 
@@ -202,7 +211,7 @@ scripts/build-release.sh 0.1.1   # all release artifacts -> dist/
 ```
 cmd/            zwan-server (control plane + Windows service) · zwan-agent (CLI) · zwan-service (engine service)
 server/         api · ipam · store · relay · host · tlsconf (ACME / self-signed) · config · ipc · supervisor
-client/         manager · engine · tun · wg · wgbind · resolver · l4 · join · ipc · profile · update
+client/         manager · engine · vip (per-network addressing) · tun · wg · wgbind · resolver · l4 · join · ipc · profile · update
 shared/         proto · keys · certpin (SPKI pinning) · acl (group policy)
 gui/            Wails v2 desktop app + tray (React + Tailwind + shadcn/ui)
 installer/      NSIS installer (app + optional client and server services)
@@ -215,9 +224,8 @@ Working today: control plane over TLS (ACME or pinned self-signed), group ACLs, 
 service + IPC), Windows installer, auto-update. Verified end-to-end minus the parts that
 need Administrator / two machines.
 
-On the roadmap: per-network address translation (so two networks may share an overlay
-range), per-service VIPs with an all-ports transparent forwarder (TCP + UDP), NAT
-traversal, IPv6 transport, and code signing.
+On the roadmap: per-service VIPs with an all-ports transparent forwarder (TCP + UDP),
+NAT traversal, IPv6 transport, and code signing.
 
 See [`구현계획.md`](./구현계획.md) (implementation plan) and
 [`MyWAN_가상네트워크_아이디어_정리.md`](./MyWAN_가상네트워크_아이디어_정리.md) (design notes).

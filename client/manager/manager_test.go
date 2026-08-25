@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"net/netip"
 	"testing"
 
 	"github.com/Zeliper/zwan/client/engine"
@@ -139,5 +140,106 @@ func TestDisconnectedNetworksAreNotComparedForOverlap(t *testing.T) {
 	addOverlapWarnings(list)
 	if list[0].Warning != "" || list[1].Warning != "" {
 		t.Fatalf("a network that is down cannot collide with anything: %+v", list)
+	}
+}
+
+// Each network needs its own slice of the local pool, or translation would map
+// two networks onto the same addresses and solve nothing.
+func TestLocalPrefixesAreDistinct(t *testing.T) {
+	m := isolated(t)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	first, err := m.freePrefixLocked()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.String() != "100.112.0.0/16" {
+		t.Fatalf("first slice = %v, want the bottom of the pool", first)
+	}
+	m.nets["a"] = &entry{prefix: first}
+
+	second, err := m.freePrefixLocked()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second == first {
+		t.Fatalf("both networks got %v", first)
+	}
+	if !netip.MustParsePrefix(DefaultLocalPool).Overlaps(second) {
+		t.Fatalf("second slice %v is outside the pool", second)
+	}
+}
+
+// Leaving a network puts its slice back.
+func TestLocalPrefixIsReusedAfterDisconnect(t *testing.T) {
+	m := isolated(t)
+	m.mu.Lock()
+	first, _ := m.freePrefixLocked()
+	m.nets["a"] = &entry{prefix: first}
+	m.mu.Unlock()
+
+	_ = m.Disconnect("a")
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	again, err := m.freePrefixLocked()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again != first {
+		t.Fatalf("slice = %v, want %v back in circulation", again, first)
+	}
+}
+
+func TestLocalPoolExhaustionIsReported(t *testing.T) {
+	t.Setenv(shared.StateDirEnv, t.TempDir())
+	m := New(Config{LocalPool: "100.112.0.0/16", LocalBits: 17}) // exactly two slices
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	a, err := m.freePrefixLocked()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.nets["a"] = &entry{prefix: a}
+	b, err := m.freePrefixLocked()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.nets["b"] = &entry{prefix: b}
+
+	if _, err := m.freePrefixLocked(); err == nil {
+		t.Fatal("a full pool should be reported rather than reusing a slice")
+	}
+}
+
+func TestNoTranslateLeavesNetworksOnTheirOverlayAddresses(t *testing.T) {
+	t.Setenv(shared.StateDirEnv, t.TempDir())
+	m := New(Config{NoTranslate: true})
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	p, err := m.freePrefixLocked()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.IsValid() {
+		t.Fatalf("translation is off, so no slice should be handed out: %v", p)
+	}
+}
+
+// A translating network keeps its overlay range out of the host's routing table,
+// so an overlap with another network is no longer a problem worth reporting.
+func TestTranslatingNetworksAreNotWarnedAbout(t *testing.T) {
+	list := []Status{
+		{Network: profile.Network{Alias: "alice"}, Engine: engine.Status{Connected: true, OverlayCIDR: "100.64.0.0/16", LocalCIDR: "100.112.0.0/16"}},
+		{Network: profile.Network{Alias: "bob"}, Engine: engine.Status{Connected: true, OverlayCIDR: "100.64.0.0/16", LocalCIDR: "100.113.0.0/16"}},
+	}
+	addOverlapWarnings(list)
+	for _, s := range list {
+		if s.Warning != "" {
+			t.Fatalf("%s was warned about despite translating: %q", s.Network.Alias, s.Warning)
+		}
 	}
 }

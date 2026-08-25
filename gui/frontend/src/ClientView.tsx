@@ -43,6 +43,8 @@ interface EngineStatus {
   dnsSuffix: string
   overlayCidr: string
   assignedIp: string
+  overlayIp: string
+  localCidr: string
   relayAddr: string
   publicKey: string
   via: string
@@ -328,8 +330,15 @@ export default function ClientView() {
                       </p>
                       <Row label="Control server" value={n.network.server} mono />
                       <Row label="Names" value={st.dnsSuffix ? `*.${st.dnsSuffix}` : `*.${n.network.alias}`} mono />
-                      <Row label="Overlay IP" value={st.assignedIp} mono />
-                      <Row label="Overlay CIDR" value={st.overlayCidr} mono />
+                      <Row label="Address on this device" value={st.assignedIp} mono />
+                      {st.localCidr ? (
+                        <>
+                          <Row label="Address in the network" value={st.overlayIp} mono />
+                          <Row label="Local range" value={st.localCidr} mono />
+                        </>
+                      ) : (
+                        <Row label="Overlay CIDR" value={st.overlayCidr} mono />
+                      )}
                       <Row label="Relay" value={st.relayAddr} mono />
                     </div>
 
@@ -381,7 +390,8 @@ export default function ClientView() {
           <Card>
             <CardContent className="flex items-center gap-2 py-3 text-sm text-muted-foreground">
               <Server className="h-4 w-4 shrink-0" />
-              Each network gets its own adapter, key and names, and nothing routes between them.
+              Each network gets its own adapter, key, address range and names, and nothing routes between them — so two
+              networks may use the same overlay range without colliding here.
             </CardContent>
           </Card>
         </div>
