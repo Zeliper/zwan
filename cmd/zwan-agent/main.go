@@ -24,6 +24,7 @@ import (
 
 	"github.com/Zeliper/zwan/client/engine"
 	"github.com/Zeliper/zwan/client/join"
+	"github.com/Zeliper/zwan/client/nrpt"
 	"github.com/Zeliper/zwan/client/tun"
 	"github.com/Zeliper/zwan/shared"
 	"github.com/Zeliper/zwan/shared/proto"
@@ -141,12 +142,48 @@ func runEngine(cfg engine.Config) {
 	log.Printf("joined: network=%s suffix=%s assigned_ip=%s via %s",
 		st.NetworkID, st.DNSSuffix, st.AssignedIP, st.Via)
 	log.Printf("node public key: %s", st.PublicKey)
+	defer bindSystemDNS(cfg.DNSAddr, st.DNSSuffix)()
 	log.Print("engine up; Ctrl+C to stop")
 
 	stop := make(chan struct{})
 	go reportStatus(eng, stop)
 	waitForInterrupt()
 	close(stop)
+}
+
+// bindSystemDNS points the machine's name resolution at our resolver for this
+// network's suffix, and returns the function that takes the rule back out.
+//
+// Without it the resolver answers only whoever queries it directly, so `ping
+// minecraft.home` still goes to the public internet. The service does the same
+// thing through client/manager; doing it here too is what makes a CLI run an
+// end-to-end test of the whole name path.
+func bindSystemDNS(dnsAddr, suffix string) func() {
+	nothing := func() {}
+	if dnsAddr == "" || suffix == "" {
+		return nothing
+	}
+	if !nrpt.Supported {
+		log.Printf("system DNS: Windows only; names resolve through %s only", dnsAddr)
+		return nothing
+	}
+	b, err := nrpt.New(dnsAddr)
+	if err != nil {
+		log.Printf("system DNS: %v (names resolve through %s only)", err, dnsAddr)
+		return nothing
+	}
+	if err := b.Apply([]string{suffix}); err != nil {
+		log.Printf("system DNS: %v (names resolve through %s only)", err, dnsAddr)
+		return nothing
+	}
+	log.Printf("system DNS: *.%s -> %s", suffix, dnsAddr)
+	return func() {
+		// A rule is machine state: it outlives this process, and left behind it
+		// sends the whole suffix to a resolver that is no longer listening.
+		if err := b.Clear(); err != nil {
+			log.Printf("system DNS cleanup: %v", err)
+		}
+	}
 }
 
 // reportStatus mirrors the engine's view into the log, which is the only status

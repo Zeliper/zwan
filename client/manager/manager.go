@@ -24,8 +24,10 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Zeliper/zwan/client/engine"
+	"github.com/Zeliper/zwan/client/nrpt"
 	"github.com/Zeliper/zwan/client/profile"
 	"github.com/Zeliper/zwan/client/resolver"
 )
@@ -94,6 +96,13 @@ type Manager struct {
 	dns   *resolver.Resolver
 	nets  map[string]*entry
 	saved []profile.Network
+
+	// bind ties the resolver into the system's name resolution. bindStop and
+	// bindDone belong to the goroutine that keeps it in step with the zones the
+	// resolver actually answers for.
+	bind     *nrpt.Binder
+	bindStop chan struct{}
+	bindDone chan struct{}
 }
 
 // New returns an idle manager.
@@ -124,6 +133,7 @@ func (m *Manager) Start() {
 		} else {
 			go func() { _ = r.Serve() }()
 			m.dns = r
+			m.startBindingLocked()
 		}
 	}
 	saved, err := profile.LoadNetworks()
@@ -261,7 +271,8 @@ func (m *Manager) Statuses() []Status {
 	return out
 }
 
-// Stop takes every network down and releases the resolver.
+// Stop takes every network down, unbinds the system's name resolution and
+// releases the resolver.
 func (m *Manager) Stop() {
 	m.mu.Lock()
 	stopping := make([]*entry, 0, len(m.nets))
@@ -271,13 +282,29 @@ func (m *Manager) Stop() {
 	m.nets = map[string]*entry{}
 	dns := m.dns
 	m.dns = nil
+	bind, bindStop, bindDone := m.bind, m.bindStop, m.bindDone
+	m.bind, m.bindStop, m.bindDone = nil, nil, nil
 	m.mu.Unlock()
 
+	// The follower goes first: it must not put a rule back after the rules have
+	// been taken out.
+	if bindStop != nil {
+		close(bindStop)
+		<-bindDone
+	}
 	for _, e := range stopping {
 		e.stop()
 	}
 	if dns != nil {
 		_ = dns.Shutdown()
+	}
+	if bind != nil {
+		// Policy rules are machine state and outlive this process. Left behind,
+		// they would keep sending every name under a joined suffix to a
+		// resolver that has stopped listening.
+		if err := bind.Clear(); err != nil {
+			log.Printf("manager: system DNS cleanup: %v", err)
+		}
 	}
 }
 
@@ -415,6 +442,83 @@ func addOverlapWarnings(list []Status) {
 		list[i].Warning = fmt.Sprintf(
 			"overlay range %s overlaps %s, and address translation is off, so one of them will lose peers",
 			list[i].Engine.OverlayCIDR, strings.Join(others, ", "))
+	}
+}
+
+// resyncEvery is how often the system's policy table is re-read even when the
+// set of zones has not changed. A group policy refresh or an administrator can
+// remove our rules underneath us, and nothing tells us when that happens.
+const resyncEvery = 5 * time.Minute
+
+// startBindingLocked hooks the resolver into the system's name resolution, so
+// the joined networks' names work for every program on the machine rather than
+// only for whoever queries the resolver directly (design doc 39). Callers hold
+// the mutex.
+func (m *Manager) startBindingLocked() {
+	if m.bind != nil {
+		return
+	}
+	if !nrpt.Supported {
+		log.Printf("manager: system DNS integration is Windows-only; names resolve through %s only", m.cfg.DNSAddr)
+		return
+	}
+	b, err := nrpt.New(m.cfg.DNSAddr)
+	if err != nil {
+		log.Printf("manager: system DNS: %v (names resolve through %s only)", err, m.cfg.DNSAddr)
+		return
+	}
+	m.bind = b
+	m.bindStop = make(chan struct{})
+	m.bindDone = make(chan struct{})
+	go m.followZones(b, m.bindStop, m.bindDone)
+}
+
+// followZones keeps the system's name resolution policy equal to the zones the
+// resolver answers for.
+//
+// It follows the resolver rather than the list of networks deliberately: a rule
+// sends every name under a suffix here and nowhere else, so it must exist only
+// while there is an answer to give. Zones appear and disappear inside the
+// engines, which is why this polls; the poll itself is a comparison of two
+// short string lists, and the operating system is only touched when they differ.
+//
+// The first pass runs before the first tick, and that is what clears rules left
+// behind by a run that was killed rather than stopped.
+func (m *Manager) followZones(b *nrpt.Binder, stop <-chan struct{}, done chan<- struct{}) {
+	defer close(done)
+
+	tick := time.NewTicker(2 * time.Second)
+	defer tick.Stop()
+	resync := time.NewTicker(resyncEvery)
+	defer resync.Stop()
+
+	var lastErr string
+	for {
+		m.mu.Lock()
+		dns := m.dns
+		m.mu.Unlock()
+		var suffixes []string
+		if dns != nil {
+			suffixes = dns.Suffixes()
+		}
+		// Report a failure once rather than every two seconds: an operator
+		// needs to see it, not to have the log buried in it.
+		if err := b.Apply(suffixes); err != nil {
+			if msg := err.Error(); msg != lastErr {
+				lastErr = msg
+				log.Printf("manager: system DNS: %v", err)
+			}
+		} else {
+			lastErr = ""
+		}
+
+		select {
+		case <-stop:
+			return
+		case <-resync.C:
+			b.Resync()
+		case <-tick.C:
+		}
 	}
 }
 

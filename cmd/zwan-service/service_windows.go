@@ -10,9 +10,11 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 
 	"github.com/Zeliper/zwan/client/ipc"
 	"github.com/Zeliper/zwan/client/manager"
+	"github.com/Zeliper/zwan/client/nrpt"
 	"github.com/Zeliper/zwan/client/profile"
 	"github.com/Zeliper/zwan/client/tun"
 	"github.com/Zeliper/zwan/shared"
@@ -103,6 +105,17 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
+		// Ctrl+C has to run the same teardown the service does: the engine
+		// leaves machine state behind — adapters, routes, name resolution
+		// policy — that no one else will clean up.
+		go func() {
+			c := make(chan os.Signal, 1)
+			signal.Notify(c, os.Interrupt)
+			<-c
+			log.Print("stopping")
+			mgr.Stop()
+			os.Exit(0)
+		}()
 		go mgr.Start()
 		if err := ipc.Serve(mgr); err != nil {
 			log.Fatal(err)
@@ -163,6 +176,12 @@ func uninstall() {
 	_, _ = s.Control(svc.Stop)
 	if err := s.Delete(); err != nil {
 		log.Fatalf("delete service: %v", err)
+	}
+	// Name resolution policy rules are machine state, not the service's own:
+	// removing the service has to leave the machine resolving names as it did
+	// before, including after a run that was killed rather than stopped.
+	if err := nrpt.Purge(); err != nil {
+		log.Printf("clear name resolution policy: %v", err)
 	}
 	log.Printf("service %s removed", serviceName)
 }

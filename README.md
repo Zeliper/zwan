@@ -233,12 +233,11 @@ installer/      NSIS installer (app + optional client and server services)
 
 Working today: control plane over TLS (ACME or pinned self-signed), group ACLs, per-service
 addresses (TCP + UDP), encrypted tunnel
-(direct + relay), split-DNS + service registry, L4 service router, desktop app (tray +
-service + IPC), Windows installer, auto-update. Verified end-to-end minus the parts that
-need Administrator / two machines.
+(direct + relay), split-DNS wired into Windows' own name resolution + service registry,
+L4 service router, desktop app (tray + service + IPC), Windows installer, auto-update.
+Verified end-to-end minus the parts that need Administrator / two machines.
 
-On the roadmap: NAT traversal, system DNS integration (NRPT), IPv6 transport, and code
-signing.
+On the roadmap: NAT traversal, IPv6 transport, and code signing.
 
 See [`구현계획.md`](./구현계획.md) (implementation plan) and
 [`MyWAN_가상네트워크_아이디어_정리.md`](./MyWAN_가상네트워크_아이디어_정리.md) (design notes).
