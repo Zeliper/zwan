@@ -23,6 +23,29 @@ if [ ! -f bin/wintun.dll ]; then
   exit 1
 fi
 
+# The desktop app keeps running in the tray after its window is closed, and a
+# running copy holds installer/stage/zwan.exe open. Windows then refuses the
+# copy, and the build stops with an error about a busy device that says nothing
+# about what to close.
+# (Two "IMAGENAME eq" filters would be ANDed and match nothing, so the whole
+# list is taken and filtered here. zwan-server.exe and zwan-service.exe are not
+# matched: the anchored names are exact.)
+if command -v tasklist >/dev/null 2>&1; then
+  RUNNING="$(tasklist //NH 2>/dev/null | grep -iE '^(zwan|gui)\.exe' || true)"
+  if [ -n "$RUNNING" ]; then
+    echo "ERROR: the desktop app is running and holds the files this build replaces." >&2
+    echo "       Quit it from the tray (closing the window is not enough), or:" >&2
+    echo "         powershell -Command \"Get-Process zwan,gui -EA SilentlyContinue | Stop-Process -Force\"" >&2
+    exit 1
+  fi
+fi
+
+# Clear what a previous run produced. Without this a build that fails part way
+# leaves the last version's artifacts sitting in dist/, looking exactly like the
+# ones that were meant to be built now.
+rm -f dist/zwan-setup.exe dist/zwan-server-* dist/SHA256SUMS.txt
+rm -f installer/stage/zwan.exe installer/stage/zwan-service.exe installer/stage/zwan-server.exe
+
 echo "== services (windows/amd64, for the installer) =="
 go build -ldflags "$LD" -o installer/stage/zwan-service.exe ./cmd/zwan-service
 go build -ldflags "$LD" -o installer/stage/zwan-server.exe  ./cmd/zwan-server
