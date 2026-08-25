@@ -18,6 +18,7 @@ import (
 	"github.com/Zeliper/zwan/client/profile"
 	"github.com/Zeliper/zwan/client/tun"
 	"github.com/Zeliper/zwan/shared"
+	"github.com/Zeliper/zwan/shared/firewall"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
 )
@@ -26,6 +27,9 @@ const (
 	serviceName    = "zwanEngine"
 	serviceDisplay = "zwan overlay engine"
 	serviceDesc    = "Runs the zwan private overlay network (virtual adapter, encrypted tunnel, DNS)."
+
+	// Fixed, because removing the service has to find this rule again.
+	firewallRuleName = "zwan overlay engine"
 )
 
 // newManager builds the supervisor for every network this device has joined.
@@ -159,7 +163,26 @@ func install() {
 	if err := s.Start(); err != nil {
 		log.Printf("service installed but failed to start: %v", err)
 	}
+	// SYSTEM services get no firewall prompt, so a direct tunnel would be
+	// dropped on the way in with nothing to say why.
+	if err := firewall.Allow(firewallRule(exe)); err != nil {
+		log.Printf("firewall: %v", err)
+		log.Printf("peers may not reach this device directly until inbound is allowed for %s", exe)
+	} else {
+		log.Printf("firewall: inbound allowed for %s", exe)
+	}
 	log.Printf("service %s installed and started", serviceName)
+}
+
+// firewallRule is the allowance this service needs. The tunnel's UDP port is
+// chosen per network and changes as networks are joined, so the rule names the
+// program instead.
+func firewallRule(exe string) firewall.Rule {
+	return firewall.Rule{
+		Name:        firewallRuleName,
+		Exe:         exe,
+		Description: "Inbound for the " + shared.ProductName + " overlay engine.",
+	}
 }
 
 func uninstall() {
@@ -176,6 +199,9 @@ func uninstall() {
 	_, _ = s.Control(svc.Stop)
 	if err := s.Delete(); err != nil {
 		log.Fatalf("delete service: %v", err)
+	}
+	if err := firewall.Remove(firewallRuleName); err != nil {
+		log.Printf("firewall: %v", err)
 	}
 	// Name resolution policy rules are machine state, not the service's own:
 	// removing the service has to leave the machine resolving names as it did

@@ -13,12 +13,17 @@ import (
 	"github.com/Zeliper/zwan/server/ipc"
 	"github.com/Zeliper/zwan/server/supervisor"
 	"github.com/Zeliper/zwan/shared"
+	"github.com/Zeliper/zwan/shared/firewall"
 )
 
 const (
 	serviceName    = "zwanServer"
 	serviceDisplay = "zwan control server"
 	serviceDesc    = "Hosts a zwan private overlay network (control plane, DNS/service registry and relay)."
+
+	// The firewall rule is found again by this name when the service is
+	// removed, so it is fixed rather than derived from anything configurable.
+	firewallRuleName = "zwan control server"
 )
 
 // program is the svc.Handler wrapping the supervisor.
@@ -119,7 +124,27 @@ func installService() {
 	if err := s.Start(); err != nil {
 		log.Printf("service installed but failed to start: %v", err)
 	}
+	// A service running as SYSTEM never gets the "allow this app?" prompt, so
+	// without this its inbound packets are dropped while it sits there bound and
+	// apparently healthy. The only symptom is a client elsewhere timing out.
+	if err := firewall.Allow(firewallRule(exe)); err != nil {
+		log.Printf("firewall: %v", err)
+		log.Printf("clients will not reach this server until inbound is allowed for %s", exe)
+	} else {
+		log.Printf("firewall: inbound allowed for %s", exe)
+	}
 	log.Printf("service %s installed and started", serviceName)
+}
+
+// firewallRule is the allowance this service needs. It names the program rather
+// than a port because the control and relay ports are both configuration, and a
+// rule for the wrong port is as silent as no rule at all.
+func firewallRule(exe string) firewall.Rule {
+	return firewall.Rule{
+		Name:        firewallRuleName,
+		Exe:         exe,
+		Description: "Inbound for the " + shared.ProductName + " control server and relay.",
+	}
 }
 
 func uninstallService() {
@@ -136,6 +161,11 @@ func uninstallService() {
 	_, _ = s.Control(svc.Stop)
 	if err := s.Delete(); err != nil {
 		log.Fatalf("delete service: %v", err)
+	}
+	// The rule is machine state and outlives the service, so removing the
+	// service has to take it out too.
+	if err := firewall.Remove(firewallRuleName); err != nil {
+		log.Printf("firewall: %v", err)
 	}
 	log.Printf("service %s removed", serviceName)
 }
