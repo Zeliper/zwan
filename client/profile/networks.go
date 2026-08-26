@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/Zeliper/zwan/shared"
+	"github.com/Zeliper/zwan/shared/proto"
 )
 
 // NetworksFile is the file name inside the machine state directory.
@@ -27,6 +28,11 @@ type Network struct {
 	Name        string `json:"name,omitempty"` // hostname label to register with
 	UseRelay    bool   `json:"useRelay"`
 	AutoConnect bool   `json:"autoConnect"`
+
+	// Publish are the services this device offers on the network. They are
+	// remembered here rather than on the server: the server's registry lives in
+	// memory, so this is what puts them back after either end restarts.
+	Publish []proto.Service `json:"publish,omitempty"`
 }
 
 type networksFile struct {
@@ -88,7 +94,80 @@ func (n Network) Validate() error {
 	if strings.TrimSpace(n.Token) == "" {
 		return errors.New("a join token is required")
 	}
+	seen := make(map[string]bool, len(n.Publish))
+	for _, s := range n.Publish {
+		if err := ValidService(s); err != nil {
+			return err
+		}
+		name := strings.ToLower(strings.TrimSpace(s.Name))
+		if seen[name] {
+			return fmt.Errorf("two services are both called %q", s.Name)
+		}
+		seen[name] = true
+	}
 	return nil
+}
+
+// ValidService reports why a service cannot be published, or nil.
+//
+// The name becomes a DNS label under the network's local name, so it has to
+// survive being one; the port is what clients connect to, and the backend port
+// is where this device forwards them. A backend of zero is not a mistake: it
+// means the program binds the service's own overlay address itself, with no
+// proxy in between.
+func ValidService(s proto.Service) error {
+	name := strings.ToLower(strings.TrimSpace(s.Name))
+	if name == "" {
+		return errors.New("a service needs a name")
+	}
+	if len(name) > 63 {
+		return fmt.Errorf("service name %q is too long", s.Name)
+	}
+	for i, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+		case r == '-' && i > 0 && i < len(name)-1:
+		default:
+			return fmt.Errorf("service name %q may use letters, digits and inner hyphens only", s.Name)
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(s.Proto)) {
+	case "", "tcp", "udp":
+	default:
+		return fmt.Errorf("service %q: protocol must be tcp or udp", s.Name)
+	}
+	if s.Port < 1 || s.Port > 65535 {
+		return fmt.Errorf("service %q needs a port between 1 and 65535", s.Name)
+	}
+	if s.BackendPort < 0 || s.BackendPort > 65535 {
+		return fmt.Errorf("service %q: backend port must be between 1 and 65535, or empty", s.Name)
+	}
+	return nil
+}
+
+// NormalizePublish puts the published services into the form the rest of the
+// code expects, so the UI does not have to.
+func NormalizePublish(list []proto.Service) []proto.Service {
+	out := make([]proto.Service, 0, len(list))
+	for _, s := range list {
+		s.Name = strings.ToLower(strings.TrimSpace(s.Name))
+		s.Proto = strings.ToLower(strings.TrimSpace(s.Proto))
+		if s.Proto == "" {
+			s.Proto = "tcp"
+		}
+		groups := make([]string, 0, len(s.AllowGroups))
+		for _, g := range s.AllowGroups {
+			if g = strings.TrimSpace(g); g != "" {
+				groups = append(groups, g)
+			}
+		}
+		s.AllowGroups = groups
+		// NodeIP and VIP are the server's to decide; whatever a caller put there
+		// is stale the moment the address is reassigned.
+		s.NodeIP, s.VIP = "", ""
+		out = append(out, s)
+	}
+	return out
 }
 
 // NormalizeAlias lowercases and trims an alias to its canonical form.

@@ -157,6 +157,7 @@ func (m *Manager) Start() {
 // already up replaces it, so editing a network's settings is one call.
 func (m *Manager) Connect(n profile.Network) error {
 	n.Alias = profile.NormalizeAlias(n.Alias)
+	n.Publish = profile.NormalizePublish(n.Publish)
 	if err := n.Validate(); err != nil {
 		return err
 	}
@@ -193,6 +194,7 @@ func (m *Manager) Connect(n profile.Network) error {
 		DNS:         zoneOf(dns),
 		LocalPrefix: prefixString(prefix),
 		ProductName: cfg.ProductName,
+		Publish:     n.Publish,
 	})
 	if err != nil {
 		// Remember it anyway: a server that is down should not lose the

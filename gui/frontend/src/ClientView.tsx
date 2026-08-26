@@ -20,6 +20,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Connect, Disconnect, Forget, Networks, ServiceUp } from '../wailsjs/go/main/App'
+import PublishEditor from './PublishEditor'
 import type { Key } from '@/lib/i18n'
 import { Mono, useT } from '@/lib/use-i18n'
 
@@ -64,6 +65,15 @@ interface NetworkProfile {
   name?: string
   useRelay: boolean
   autoConnect: boolean
+  publish?: PublishedService[]
+}
+
+export interface PublishedService {
+  name: string
+  proto: string
+  port: number
+  backend_port?: number
+  allow_groups?: string[]
 }
 interface NetworkStatus {
   network: NetworkProfile
@@ -379,6 +389,14 @@ export default function ClientView() {
                         </div>
                       ))}
                     </div>
+
+                    <PublishEditor
+                      network={n.network}
+                      busy={busy === n.network.alias}
+                      onSave={(publish) =>
+                        run(n.network.alias, () => Connect({ ...n.network, publish } as any))
+                      }
+                    />
 
                     <div>
                       <p className="mb-1 flex items-center gap-2 text-sm font-medium">
