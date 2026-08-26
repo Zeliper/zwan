@@ -149,6 +149,7 @@ export namespace main {
 	    tlsMode: string;
 	    pin: string;
 	    joinUrl: string;
+	    relayPublic: string;
 	    peers: proto.Peer[];
 	    services: proto.Service[];
 	    lastError: string;
@@ -165,6 +166,7 @@ export namespace main {
 	        this.tlsMode = source["tlsMode"];
 	        this.pin = source["pin"];
 	        this.joinUrl = source["joinUrl"];
+	        this.relayPublic = source["relayPublic"];
 	        this.peers = this.convertValues(source["peers"], proto.Peer);
 	        this.services = this.convertValues(source["services"], proto.Service);
 	        this.lastError = source["lastError"];

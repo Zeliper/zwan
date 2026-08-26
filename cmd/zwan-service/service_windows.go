@@ -7,6 +7,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -19,6 +20,7 @@ import (
 	"github.com/Zeliper/zwan/client/tun"
 	"github.com/Zeliper/zwan/shared"
 	"github.com/Zeliper/zwan/shared/firewall"
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
 )
@@ -147,9 +149,19 @@ func install() {
 	}
 	defer m.Disconnect()
 
+	// An upgrade runs this over an existing installation, so "already there" is
+	// the ordinary case and not a failure. The binary has just been replaced on
+	// disk under the same path, so the service only has to be started again —
+	// refusing here is how an upgrade turns into a no-op that leaves the old
+	// version running and says it succeeded.
 	if s, err := m.OpenService(serviceName); err == nil {
-		s.Close()
-		log.Fatalf("service %s already installed", serviceName)
+		defer s.Close()
+		if err := s.Start(); err != nil && !alreadyRunning(err) {
+			log.Fatalf("service %s is installed but would not start: %v", serviceName, err)
+		}
+		log.Printf("service %s already installed; running", serviceName)
+		ensureFirewall(exe)
+		return
 	}
 	s, err := m.CreateService(serviceName, exe, mgr.Config{
 		DisplayName: serviceDisplay,
@@ -163,15 +175,27 @@ func install() {
 	if err := s.Start(); err != nil {
 		log.Printf("service installed but failed to start: %v", err)
 	}
-	// SYSTEM services get no firewall prompt, so a direct tunnel would be
-	// dropped on the way in with nothing to say why.
+	ensureFirewall(exe)
+	log.Printf("service %s installed and started", serviceName)
+}
+
+// ensureFirewall opens the way in, on an upgrade as well as a first install.
+//
+// SYSTEM services get no firewall prompt, so a direct tunnel would be dropped on
+// the way in with nothing to say why.
+func ensureFirewall(exe string) {
 	if err := firewall.Allow(firewallRule(exe)); err != nil {
 		log.Printf("firewall: %v", err)
 		log.Printf("peers may not reach this device directly until inbound is allowed for %s", exe)
-	} else {
-		log.Printf("firewall: inbound allowed for %s", exe)
+		return
 	}
-	log.Printf("service %s installed and started", serviceName)
+	log.Printf("firewall: inbound allowed for %s", exe)
+}
+
+// alreadyRunning reports whether a start failed only because the service was
+// already running, which on an upgrade is exactly what is wanted.
+func alreadyRunning(err error) bool {
+	return errors.Is(err, windows.ERROR_SERVICE_ALREADY_RUNNING)
 }
 
 // firewallRule is the allowance this service needs. The tunnel's UDP port is
