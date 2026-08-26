@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"net/netip"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -144,7 +145,7 @@ func (e *Engine) Start(cfg Config) error {
 	if endpoint == "" {
 		endpoint = fmt.Sprintf("127.0.0.1:%d", cfg.WGPort)
 	}
-	res, err := cl.Join(cfg.Token, cfg.DeviceUUID, cfg.Name, endpoint)
+	res, err := cl.Join(cfg.Token, cfg.DeviceUUID, deviceName(cfg.Name), endpoint)
 	if err != nil {
 		e.setErr("join: %v", err)
 		return err
@@ -260,6 +261,54 @@ func (e *Engine) Start(cfg Config) error {
 
 	go e.run(cl, dev, ad, zone, owned, xlate, res.Register.AssignedIP, deviceIP, suffix, cfg, stop, done)
 	return nil
+}
+
+// deviceName settles what this device is called on the overlay.
+//
+// The field is optional in the UI, and "optional" has to mean there is a sensible
+// default rather than nothing at all: a device that registers without a name gets
+// no DNS record, so it cannot be reached by name — which is the thing the product
+// is for. The machine's own hostname is what the user already calls it.
+//
+// The result becomes a DNS label, so it is reduced to what a label may hold. A
+// machine named in Korean, or with a space in it, would otherwise produce a name
+// nobody can type.
+func deviceName(given string) string {
+	name := dnsLabel(given)
+	if name != "" {
+		return name
+	}
+	host, _ := os.Hostname()
+	if name = dnsLabel(host); name != "" {
+		return name
+	}
+	return ""
+}
+
+// dnsLabel lowercases a name and keeps only what a DNS label may contain,
+// collapsing everything else to a single hyphen.
+func dnsLabel(s string) string {
+	var b strings.Builder
+	dash := false
+	for _, r := range strings.ToLower(strings.TrimSpace(s)) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			dash = false
+		default:
+			// One hyphen for any run of unusable characters, and never a leading
+			// one: a label may not start or end with a hyphen.
+			if !dash && b.Len() > 0 {
+				b.WriteByte('-')
+				dash = true
+			}
+		}
+	}
+	out := strings.TrimRight(b.String(), "-")
+	if len(out) > 63 {
+		out = strings.TrimRight(out[:63], "-")
+	}
+	return out
 }
 
 // Stop tears the connection down and blocks until cleanup completes.

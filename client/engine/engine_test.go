@@ -5,6 +5,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"sync"
 	"testing"
 
@@ -197,6 +199,54 @@ func TestServiceAddressesTravelWithTheirHost(t *testing.T) {
 	for i := range want {
 		if allowed[i] != want[i] {
 			t.Fatalf("allowed = %v, want %v", allowed, want)
+		}
+	}
+}
+
+// A device that registers without a name gets no DNS record, so it cannot be
+// reached by name at all — and the field is optional in the UI, which only makes
+// sense if leaving it blank means something. Only the CLI used to fall back to
+// the machine's hostname; anyone joining from the desktop app arrived nameless.
+func TestDeviceNameFallsBackToTheMachineName(t *testing.T) {
+	host, err := os.Hostname()
+	if err != nil || dnsLabel(host) == "" {
+		t.Skip("this machine has no usable hostname to fall back to")
+	}
+	if got := deviceName(""); got != dnsLabel(host) {
+		t.Errorf("deviceName(\"\") = %q, want the machine name %q", got, dnsLabel(host))
+	}
+	if got := deviceName("  "); got == "" {
+		t.Error("a blank name should fall back, not stay blank")
+	}
+	if got := deviceName("laptop"); got != "laptop" {
+		t.Errorf("deviceName(%q) = %q, want it kept", "laptop", got)
+	}
+}
+
+// The name becomes a DNS label, so it has to survive being one. A machine named
+// in Korean, or with a space in it, would otherwise produce something nobody can
+// type into an address bar.
+func TestDeviceNameIsUsableAsADNSLabel(t *testing.T) {
+	cases := map[string]string{
+		"Laptop":                "laptop",
+		"my laptop":             "my-laptop",
+		"DESKTOP-Q7DBQ6I":       "desktop-q7dbq6i",
+		"집-컴퓨터":                 "",
+		"nas_01":                "nas-01",
+		"--weird--":             "weird",
+		"a.b.c":                 "a-b-c",
+		strings.Repeat("x", 80): strings.Repeat("x", 63),
+	}
+	for given, want := range cases {
+		if got := dnsLabel(given); got != want {
+			t.Errorf("dnsLabel(%q) = %q, want %q", given, got, want)
+		}
+	}
+	// Never a leading or trailing hyphen: a label may not have one.
+	for _, given := range []string{" x ", "!!!x!!!", "한글x한글"} {
+		got := dnsLabel(given)
+		if strings.HasPrefix(got, "-") || strings.HasSuffix(got, "-") {
+			t.Errorf("dnsLabel(%q) = %q, which is not a valid label", given, got)
 		}
 	}
 }
