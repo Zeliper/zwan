@@ -108,6 +108,7 @@ func (s *Supervisor) State() ipc.State {
 		st.TLSMode = s.srv.TLSMode()
 		st.Pin = s.srv.Pin()
 		st.JoinURL = s.srv.JoinURL(s.cfg.PublicHost)
+		st.RelayPublic = s.srv.RelayPublic()
 		st.Peers = s.srv.Members()
 		st.Services = s.srv.Services()
 	}

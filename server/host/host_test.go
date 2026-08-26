@@ -184,3 +184,61 @@ func TestUnknownTLSModeIsRejected(t *testing.T) {
 		t.Fatal("an unknown TLS mode should be rejected")
 	}
 }
+
+// A listen address is not a destination. Handing "0.0.0.0:3478" to a client
+// tells it to send the tunnel nowhere, and nothing else notices: the join
+// succeeds, the network reports itself connected, and only the traffic is
+// missing. This is what the client received before the relay address was
+// derived rather than copied.
+func TestRelayIsAdvertisedAtAnAddressAClientCanReach(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  Config
+		want string
+	}{
+		{
+			name: "public host supplies the host, the relay supplies the port",
+			cfg:  Config{PublicHost: "203.0.113.5:8787"},
+			want: "203.0.113.5:",
+		},
+		{
+			name: "a public host without a port works the same way",
+			cfg:  Config{PublicHost: "vpn.example.test"},
+			want: "vpn.example.test:",
+		},
+		{
+			name: "an explicit relay address wins",
+			cfg:  Config{PublicHost: "203.0.113.5:8787", RelayPublic: "relay.example.test:9999"},
+			want: "relay.example.test:9999",
+		},
+		{
+			name: "with nothing published a wildcard falls back to loopback",
+			cfg:  Config{},
+			want: "127.0.0.1:",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfg := c.cfg
+			cfg.RelayAddr = "0.0.0.0:3478"
+			got := relayPublic(cfg, "0.0.0.0:3478")
+			if !strings.HasPrefix(got, c.want) {
+				t.Fatalf("relay advertised as %q, want it to start with %q", got, c.want)
+			}
+			if host, _, err := net.SplitHostPort(got); err != nil {
+				t.Fatalf("relay address %q does not parse: %v", got, err)
+			} else if host == "0.0.0.0" || host == "::" || host == "" {
+				t.Fatalf("relay advertised as %q, which is a listen address and not somewhere to send to", got)
+			}
+		})
+	}
+}
+
+// The advertised port has to be the one the relay actually got, which is not the
+// one that was asked for when the request was ":0".
+func TestRelayAdvertisesThePortItActuallyBound(t *testing.T) {
+	got := relayPublic(Config{PublicHost: "203.0.113.5", RelayAddr: "0.0.0.0:0"}, "0.0.0.0:51999")
+	if got != "203.0.113.5:51999" {
+		t.Fatalf("relay advertised as %q, want 203.0.113.5:51999", got)
+	}
+}

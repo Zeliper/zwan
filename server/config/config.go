@@ -129,6 +129,7 @@ func (c Config) Host() host.Config {
 		ControlAddr: c.ControlAddr,
 		RelayAddr:   c.RelayAddr,
 		RelayPublic: c.RelayPublic,
+		PublicHost:  c.PublicHost,
 		TLSMode:     c.TLSMode,
 		TLSDomains:  c.Domains,
 		GroupTokens: c.GroupTokens,

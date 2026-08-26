@@ -32,7 +32,12 @@ type Config struct {
 	Token       string // join token for the default group
 	ControlAddr string // control API listen (host:port)
 	RelayAddr   string // relay UDP listen (host:port)
-	RelayPublic string // relay host:port advertised to clients (default = RelayAddr)
+	RelayPublic string // relay host:port advertised to clients (default: PublicHost + the relay's port)
+
+	// PublicHost is where clients reach this server from outside. It also
+	// decides where the relay is advertised, since a client that can reach the
+	// control plane at a host can reach the relay there too.
+	PublicHost string
 
 	// TLS. Mode is "auto" (default), "off", "self" or "acme"; auto means ACME
 	// when Domains is set and a pinned self-signed certificate otherwise.
@@ -56,6 +61,7 @@ type Config struct {
 type Host struct {
 	cfg      Config
 	ctrlAddr string // actual bound control address (resolves :0 and wildcards)
+	relayPub string // relay address handed to clients (never a listen address)
 	httpSrv  *http.Server
 	acmeSrv  *http.Server
 	rly      *relay.Relay
@@ -71,10 +77,6 @@ func New() *Host { return &Host{} }
 func (h *Host) Start(cfg Config) error {
 	if h.httpSrv != nil {
 		return errors.New("host already running")
-	}
-	relayPub := cfg.RelayPublic
-	if relayPub == "" {
-		relayPub = cfg.RelayAddr
 	}
 	mode, err := tlsconf.ParseMode(cfg.TLSMode)
 	if err != nil {
@@ -107,17 +109,19 @@ func (h *Host) Start(cfg Config) error {
 	if err != nil {
 		return err
 	}
+	rly := relay.New()
+	bound, err := rly.Listen(cfg.RelayAddr)
+	if err != nil {
+		return err
+	}
+	go func() { _ = rly.Serve() }()
+
+	relayPub := relayPublic(cfg, bound.String())
 	nw := store.NewNetwork(cfg.NetworkID, cfg.DNSSuffix, cfg.CIDR)
 	srv := api.New(api.Options{
 		Network: nw, Nodes: nodes, Services: services,
 		Tokens: tokens, Policy: &acl.Policy{Rules: cfg.ACL}, RelayAddr: relayPub,
 	})
-
-	rly := relay.New()
-	if _, err := rly.Listen(cfg.RelayAddr); err != nil {
-		return err
-	}
-	go func() { _ = rly.Serve() }()
 
 	ln, err := net.Listen("tcp", cfg.ControlAddr)
 	if err != nil {
@@ -144,7 +148,8 @@ func (h *Host) Start(cfg Config) error {
 		}()
 	}
 
-	h.cfg, h.ctrlAddr, h.httpSrv, h.acmeSrv, h.rly, h.tlsRes, h.nw = cfg, ln.Addr().String(), httpSrv, acmeSrv, rly, tlsRes, nw
+	h.cfg, h.ctrlAddr, h.relayPub = cfg, ln.Addr().String(), relayPub
+	h.httpSrv, h.acmeSrv, h.rly, h.tlsRes, h.nw = httpSrv, acmeSrv, rly, tlsRes, nw
 	return nil
 }
 
@@ -224,6 +229,11 @@ func (h *Host) Pin() string {
 	return h.tlsRes.Pin
 }
 
+// RelayPublic is the relay address clients are given. It is worth showing: an
+// operator can read the listen address off their own configuration, but not what
+// the far end will be told to send to.
+func (h *Host) RelayPublic() string { return h.relayPub }
+
 // Scheme is the URL scheme clients must use ("https", or "http" with TLS off).
 func (h *Host) Scheme() string {
 	if h.tlsRes == nil {
@@ -267,6 +277,40 @@ func (h *Host) JoinURL(publicHost string) string {
 		u += "#" + url.PathEscape(h.tlsRes.Pin)
 	}
 	return u
+}
+
+// relayPublic decides where clients should send their tunnel traffic.
+//
+// A listen address is not a destination. "0.0.0.0:3478" means "every interface
+// on this machine", and handing that to a client tells it to send the tunnel
+// nowhere — while the join still succeeds and the network still reports itself
+// connected, because none of that touches the relay.
+//
+// What the operator published wins. Failing that the relay is at the same host
+// clients already reach the control plane at, on the relay's own port: anyone
+// who got here can get there. Failing that too, a wildcard collapses to
+// loopback, which is right for a local test and visibly wrong for anything else.
+func relayPublic(cfg Config, bound string) string {
+	if cfg.RelayPublic != "" {
+		return ensurePort(cfg.RelayPublic, bound)
+	}
+	if host := hostOf(cfg.PublicHost); host != "" {
+		if _, port, err := net.SplitHostPort(bound); err == nil && port != "" {
+			return net.JoinHostPort(host, port)
+		}
+	}
+	return localAddr(bound)
+}
+
+// hostOf takes the host out of an address that may or may not name a port.
+func hostOf(hostport string) string {
+	if hostport == "" {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(hostport); err == nil {
+		return host
+	}
+	return hostport
 }
 
 // ensurePort leaves an address that already names a port alone, and gives the

@@ -51,6 +51,7 @@ interface HostState {
   tlsMode: string
   pin: string
   joinUrl: string
+  relayPublic: string
   peers: Peer[]
   services: Service[]
   lastError: string
@@ -429,7 +430,7 @@ export default function HostView() {
           </div>
           <div className="flex items-center justify-between">
             <span className="text-muted-foreground">{t('common.relay')}</span>
-            <span className="font-mono">{state!.config.relayAddr}</span>
+            <span className="font-mono">{state!.relayPublic || state!.config.relayAddr}</span>
           </div>
           <div className="flex items-center justify-between gap-2">
             <span className="shrink-0 text-muted-foreground">{t('host.share.trust')}</span>

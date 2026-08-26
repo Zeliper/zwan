@@ -17,11 +17,17 @@ const PipeName = `\\.\pipe\zwan-server`
 
 // State is a snapshot of the hosted network for the UI.
 type State struct {
-	Running   bool            `json:"running"`
-	Config    config.Config   `json:"config"`
-	TLSMode   string          `json:"tlsMode"` // "self", "acme" or "off"
-	Pin       string          `json:"pin"`     // key fingerprint clients must pin
-	JoinURL   string          `json:"joinUrl"` // server address + pin, ready to hand out
+	Running bool          `json:"running"`
+	Config  config.Config `json:"config"`
+	TLSMode string        `json:"tlsMode"` // "self", "acme" or "off"
+	Pin     string        `json:"pin"`     // key fingerprint clients must pin
+	JoinURL string        `json:"joinUrl"` // server address + pin, ready to hand out
+
+	// RelayPublic is where clients are told to send tunnel traffic, which is not
+	// the same as the relay's listen address and is the one that has to be
+	// reachable from outside.
+	RelayPublic string `json:"relayPublic"`
+
 	Peers     []proto.Peer    `json:"peers"`
 	Services  []proto.Service `json:"services"`
 	LastError string          `json:"lastError"`

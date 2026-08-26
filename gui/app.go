@@ -86,14 +86,19 @@ func unwrap(resp ipc.Response, err error) ([]manager.Status, error) {
 
 // HostState is the server view for the frontend.
 type HostState struct {
-	Running   bool                `json:"running"`
-	Config    serverconfig.Config `json:"config"`
-	TLSMode   string              `json:"tlsMode"` // "self", "acme" or "off"
-	Pin       string              `json:"pin"`     // key fingerprint clients must pin
-	JoinURL   string              `json:"joinUrl"` // server address + pin, ready to hand out
-	Peers     []proto.Peer        `json:"peers"`
-	Services  []proto.Service     `json:"services"`
-	LastError string              `json:"lastError"`
+	Running bool                `json:"running"`
+	Config  serverconfig.Config `json:"config"`
+	TLSMode string              `json:"tlsMode"` // "self", "acme" or "off"
+	Pin     string              `json:"pin"`     // key fingerprint clients must pin
+	JoinURL string              `json:"joinUrl"` // server address + pin, ready to hand out
+
+	// RelayPublic is where clients are told to send tunnel traffic. The listen
+	// address is in the configuration; this is the one that has to be reachable.
+	RelayPublic string `json:"relayPublic"`
+
+	Peers     []proto.Peer    `json:"peers"`
+	Services  []proto.Service `json:"services"`
+	LastError string          `json:"lastError"`
 
 	// ManagedByService is false when this app is hosting the network itself
 	// because the server service is not installed — the network then stops when
@@ -190,7 +195,8 @@ func (a *App) local() *supervisor.Supervisor {
 func hostState(st serveripc.State, managed bool) *HostState {
 	return &HostState{
 		Running: st.Running, Config: st.Config, TLSMode: st.TLSMode, Pin: st.Pin,
-		JoinURL: st.JoinURL, Peers: st.Peers, Services: st.Services, LastError: st.LastError,
+		JoinURL: st.JoinURL, RelayPublic: st.RelayPublic,
+		Peers: st.Peers, Services: st.Services, LastError: st.LastError,
 		ManagedByService: managed,
 	}
 }
