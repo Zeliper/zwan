@@ -50,6 +50,8 @@ func (f *fakeHandler) State() State {
 // TestPipeRoundTrip covers the whole channel in one test: the pipe name is a
 // fixed global, so a second concurrent listener would collide.
 func TestPipeRoundTrip(t *testing.T) {
+	requireFreePipe(t)
+
 	h := &fakeHandler{}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- Serve(h) }()
@@ -111,6 +113,27 @@ var errFake = fakeErr("no token configured")
 type fakeErr string
 
 func (e fakeErr) Error() string { return string(e) }
+
+// requireFreePipe refuses to run when something already answers on the pipe.
+//
+// The name is a fixed global, so an installed zwanServer service owns it on any
+// machine the product is installed on — which is the machine this is most likely
+// to be run on. Serve then fails to listen, and the test carries on regardless:
+// the early assertions pass because the real service answers them, and the rest
+// of the test drives it. Start really starts a network and Stop really stops
+// one, on the developer's own machine, while the failure that eventually
+// surfaces is an unrelated-looking count of calls the fake never received.
+//
+// waitForPipe cannot catch this on its own. It checks the error channel before
+// each dial, but the first dial succeeds — answered by the service — and returns
+// before Serve has got round to reporting that the name was taken.
+func requireFreePipe(t *testing.T) {
+	t.Helper()
+	if _, err := Status(); err == nil {
+		t.Skipf("something already answers on %s (the zwanServer service?); "+
+			"stop it before running this test, or it would be the thing under test", PipeName)
+	}
+}
 
 func waitForPipe(t *testing.T, serveErr <-chan error) {
 	t.Helper()
